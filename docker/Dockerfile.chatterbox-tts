@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# Chatterbox-Turbo — Text-to-Speech server with voice cloning
+#
+# Uses NVIDIA NGC PyTorch container for aarch64 CUDA support.
+# Builds torchaudio from source to match NGC's custom torch ABI.
+# Model weights are downloaded on first startup via from_pretrained().
+
+FROM nvcr.io/nvidia/pytorch:25.02-py3
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libsndfile1 \
+      libgomp1 \
+      git \
+      build-essential \
+      cmake && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build torchaudio from source to match NGC's torch
+RUN TORCH_VER=$(python3 -c "import torch; v=torch.__version__.split('+')[0].split('a')[0]; print(v)") && \
+    echo "Building torchaudio for torch ${TORCH_VER}" && \
+    git clone --depth 1 --branch v${TORCH_VER} https://github.com/pytorch/audio.git /tmp/audio && \
+    cd /tmp/audio && \
+    USE_CUDA=1 pip3 install --no-build-isolation --no-deps . && \
+    rm -rf /tmp/audio
+
+# Install chatterbox-tts and all its deps with --no-deps to avoid solver conflicts,
+# then install the actual leaf dependencies normally
+RUN pip3 install --no-cache-dir --no-deps \
+    chatterbox-tts \
+    "s3tokenizer==0.3.0" \
+    "conformer==0.3.2" \
+    "resemble-perth==1.0.1" \
+    "diffusers==0.29.0" \
+    "transformers==4.46.3"
+
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    python-multipart \
+    soundfile \
+    einops \
+    librosa \
+    omegaconf \
+    safetensors \
+    pykakasi \
+    pyloudnorm \
+    spacy-pkuseg \
+    huggingface-hub \
+    "tokenizers>=0.20,<0.21"
+
+COPY docker/chatterbox_tts_server.py /opt/muse/chatterbox_tts_server.py
+
+WORKDIR /opt/muse
+EXPOSE 4123
+
+CMD ["python3", "chatterbox_tts_server.py"]

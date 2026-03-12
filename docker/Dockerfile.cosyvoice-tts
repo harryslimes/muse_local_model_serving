@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# CosyVoice 3.0 — FastAPI TTS server with zero-shot streaming support
+#
+
+FROM nvcr.io/nvidia/pytorch:25.02-py3
+
+ARG COSYVOICE_REPO_REF=main
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTORCH_NVFUSER_DISABLE=1
+ENV TORCH_CUDA_ARCH_LIST=12.0
+ENV COSYVOICE_REPO_DIR=/opt/CosyVoice/repo
+ENV PYTHONPATH=/opt/CosyVoice/repo:/opt/CosyVoice/repo/third_party/Matcha-TTS
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      cmake \
+      curl \
+      ffmpeg \
+      git \
+      git-lfs \
+      libsndfile1 \
+      libsox-dev \
+      sox \
+      unzip \
+      wget && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Build torchaudio against NGC's CUDA-enabled torch ABI.
+RUN TORCH_VER=$(python3 -c "import torch; v=torch.__version__.split('+')[0].split('a')[0]; print(v)") && \
+    git clone --depth 1 --branch "v${TORCH_VER}" https://github.com/pytorch/audio.git /tmp/audio && \
+    cd /tmp/audio && \
+    USE_CUDA=1 pip3 install --no-build-isolation --no-deps . && \
+    rm -rf /tmp/audio
+
+WORKDIR /opt/CosyVoice
+
+RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git repo && \
+    cd repo && \
+    git checkout "${COSYVOICE_REPO_REF}" && \
+    git submodule update --init --recursive
+
+# Install only the dependencies needed for inference-serving on aarch64.
+RUN python3 -m pip install --no-cache-dir 'setuptools<81' 'packaging<=24.2' wheel && \
+    grep -vE '^(--extra-index-url|deepspeed==|fastapi-cli==|gradio==|grpcio==|grpcio-tools==|networkx==|onnxruntime-gpu==|openai-whisper==|tensorboard==|tensorrt-cu12==|tensorrt-cu12-bindings==|tensorrt-cu12-libs==|torch==|torchaudio==)' /opt/CosyVoice/repo/requirements.txt > /tmp/cosyvoice-runtime-requirements.txt && \
+    printf '%s\n' 'networkx>=3.3' 'onnxruntime==1.18.0' 'python-multipart' >> /tmp/cosyvoice-runtime-requirements.txt && \
+    python3 -m pip install --no-cache-dir -r /tmp/cosyvoice-runtime-requirements.txt && \
+    python3 -m pip install --no-cache-dir --no-build-isolation openai-whisper==20231117
+
+COPY docker/cosyvoice_tts_server.py /opt/muse/cosyvoice_tts_server.py
+
+WORKDIR /opt/muse
+EXPOSE 4126
+
+CMD ["python3", "cosyvoice_tts_server.py"]

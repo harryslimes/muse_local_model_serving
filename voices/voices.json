@@ -1,0 +1,6 @@
+{
+  "default": {
+    "file": "her_prompt.wav",
+    "description": "Default voice (place a 10+ second WAV clip here)"
+  }
+}

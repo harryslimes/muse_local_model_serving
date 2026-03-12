@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip install --no-cache-dir fastapi uvicorn requests
+
+WORKDIR /opt/muse
+COPY docker/qwen35_openclaw_proxy.py /opt/muse/qwen35_openclaw_proxy.py
+
+ENTRYPOINT ["uvicorn", "qwen35_openclaw_proxy:app"]
+CMD ["--host", "0.0.0.0", "--port", "12434"]

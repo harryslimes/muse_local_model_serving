@@ -1,0 +1,10 @@
+*
+!docker/
+!docker/**
+!sources/
+!sources/stable-diffusion.cpp/
+!sources/stable-diffusion.cpp/**
+sources/stable-diffusion.cpp/.git
+sources/stable-diffusion.cpp/.git/**
+sources/stable-diffusion.cpp/build
+sources/stable-diffusion.cpp/build/**

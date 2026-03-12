@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+
+ARG CUDA_DEVEL_IMAGE=nvidia/cuda:13.0.0-devel-ubuntu24.04
+ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:13.0.0-runtime-ubuntu24.04
+ARG CUDA_ARCH=120
+
+FROM ${CUDA_DEVEL_IMAGE} AS build
+ENV DEBIAN_FRONTEND=noninteractive
+ARG CUDA_ARCH
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      ninja-build \
+      ca-certificates \
+      git && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/stable-diffusion.cpp
+COPY sources/stable-diffusion.cpp/ /opt/stable-diffusion.cpp/
+
+RUN cmake -S . -B build -G Ninja \
+    -DSD_CUDA=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH:-120} && \
+    cmake --build build --config Release --target sd-server -j"$(nproc)"
+
+FROM ${CUDA_RUNTIME_IMAGE} AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3 \
+      python3-pip \
+      python3-venv \
+      libgomp1 \
+      curl \
+      ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m pip install --no-cache-dir --break-system-packages huggingface_hub
+
+COPY --from=build /opt/stable-diffusion.cpp/build/bin/sd-server /usr/local/bin/sd-server
+COPY docker/flux2_entrypoint.py /opt/muse/flux2_entrypoint.py
+
+RUN chmod +x /usr/local/bin/sd-server /opt/muse/flux2_entrypoint.py
+
+WORKDIR /runtime
+ENTRYPOINT ["python3", "/opt/muse/flux2_entrypoint.py"]

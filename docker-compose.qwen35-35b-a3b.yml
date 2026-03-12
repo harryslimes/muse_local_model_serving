@@ -1,0 +1,83 @@
+services:
+  qwen35-35b-a3b-downloader:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.qwen35-downloader
+    image: muse/qwen35-model-downloader:local
+    environment:
+      MODEL_ROOT: /models
+      MODEL_REPO: ${MODEL_REPO:-unsloth/Qwen3.5-35B-A3B-GGUF}
+      MODEL_FILE: ${MODEL_FILE:-Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${MODEL_ROOT_HOST:-./models}:/models
+
+  qwen35-35b-a3b-llama:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.qwen35-llama-cuda
+      args:
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-b8185}
+    image: ${LLAMA_IMAGE:-muse/qwen35-llama-cuda:local}
+    gpus: all
+    entrypoint: ["/usr/bin/sh", "/opt/muse/qwen35_llama_entrypoint.sh"]
+    environment:
+      MODEL_PATH: ${MODEL_PATH:-/models/unsloth/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf}
+      LLAMA_PORT: ${LLAMA_PORT:-8080}
+      N_GPU_LAYERS: ${N_GPU_LAYERS:-99}
+      CONTEXT_SIZE: ${CONTEXT_SIZE:-32768}
+      TEMPERATURE: ${TEMPERATURE:-0.6}
+      TOP_P: ${TOP_P:-0.95}
+      CHAT_TEMPLATE_FILE: ${CHAT_TEMPLATE_FILE:-/app/chat-template/qwen3.jinja}
+      REASONING_FORMAT: ${REASONING_FORMAT:-deepseek}
+      REASONING_BUDGET: ${REASONING_BUDGET:--1}
+      LLAMA_ENABLE_JINJA: ${LLAMA_ENABLE_JINJA:-true}
+      LLAMA_DISABLE_NHFR: ${LLAMA_DISABLE_NHFR:-false}
+      SLOT_SAVE_PATH: ${SLOT_SAVE_PATH:-/runtime/slot-cache}
+      LLAMA_EXTRA_FLAGS: ${LLAMA_EXTRA_FLAGS:-}
+    ports:
+      - "${LLAMA_BIND_IP:-127.0.0.1}:${LLAMA_PORT_HOST:-18080}:${LLAMA_PORT:-8080}"
+    volumes:
+      - ${MODEL_ROOT_HOST:-./models}:/models
+      - ${RUN_ROOT_HOST:-./runtime/qwen35_35b_a3b_server}:/runtime
+      - ./docker/qwen35_llama_entrypoint.sh:/opt/muse/qwen35_llama_entrypoint.sh:ro
+      - ./docker/chat-templates/qwen3_openclaw.jinja:/app/chat-template/qwen3.jinja:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${LLAMA_PORT:-8080}/health >/dev/null || curl -fsS http://127.0.0.1:${LLAMA_PORT:-8080}/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  qwen35-35b-a3b-proxy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.qwen35-proxy
+    image: muse/qwen35-openclaw-proxy:local
+    depends_on:
+      qwen35-35b-a3b-llama:
+        condition: service_healthy
+    environment:
+      UPSTREAM_BASE_URL: http://qwen35-35b-a3b-llama:${LLAMA_PORT:-8080}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      PROXY_MODEL_NAME: ${PROXY_MODEL_NAME:-Qwen3.5-35B-A3B}
+      FORCE_MODEL_NAME: ${FORCE_MODEL_NAME:-true}
+      ENABLE_THINKING_DEFAULT: ${ENABLE_THINKING_DEFAULT:-true}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-600}
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "${LISTEN_PORT:-12434}"
+    ports:
+      - "${LISTEN_IP:-127.0.0.1}:${LISTEN_PORT:-12434}:${LISTEN_PORT:-12434}"
+    volumes:
+      - ${RUN_ROOT_HOST:-./runtime/qwen35_35b_a3b_server}:/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${LISTEN_PORT:-12434}/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 40
+      start_period: 20s

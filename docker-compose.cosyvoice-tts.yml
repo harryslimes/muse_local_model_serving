@@ -1,0 +1,42 @@
+services:
+  cosyvoice-tts:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cosyvoice-tts
+      args:
+        COSYVOICE_REPO_REF: ${COSYVOICE_REPO_REF:-main}
+    image: muse/cosyvoice-tts:local
+    gpus: all
+    ipc: host
+    environment:
+      LISTEN_PORT: ${COSYVOICE_PORT:-4126}
+      COSYVOICE_MODEL_DIR: ${COSYVOICE_MODEL_DIR:-FunAudioLLM/Fun-CosyVoice3-0.5B-2512}
+      COSYVOICE_DEFAULT_MODE: ${COSYVOICE_DEFAULT_MODE:-zero_shot}
+      COSYVOICE_DEFAULT_SPEED: ${COSYVOICE_DEFAULT_SPEED:-1.0}
+      COSYVOICE_TEXT_FRONTEND: ${COSYVOICE_TEXT_FRONTEND:-true}
+      COSYVOICE_LOAD_FP16: ${COSYVOICE_LOAD_FP16:-false}
+      COSYVOICE_LOAD_TRT: ${COSYVOICE_LOAD_TRT:-false}
+      COSYVOICE_LOAD_VLLM: ${COSYVOICE_LOAD_VLLM:-false}
+      COSYVOICE_TRT_CONCURRENT: ${COSYVOICE_TRT_CONCURRENT:-1}
+      VOICES_DIR: /voices
+    ports:
+      - "${COSYVOICE_BIND_IP:-127.0.0.1}:${COSYVOICE_PORT:-4126}:${COSYVOICE_PORT:-4126}"
+    volumes:
+      - ${VOICES_DIR_HOST:-./voices}:/voices
+      - ${MODEL_ROOT_HOST:-./models}:/models
+      - ${COSYVOICE_HF_CACHE_HOST:-cosyvoice-hf-cache}:/root/.cache/huggingface
+      - ${COSYVOICE_MS_CACHE_HOST:-cosyvoice-modelscope-cache}:/root/.cache/modelscope
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${COSYVOICE_PORT:-4126}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 30
+      start_period: 600s
+
+volumes:
+  cosyvoice-hf-cache:
+  cosyvoice-modelscope-cache:

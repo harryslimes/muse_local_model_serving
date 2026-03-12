@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+
+ARG CUDA_VERSION=12.4.1
+ARG UBUNTU_VERSION=22.04
+ARG LLAMA_CPP_REF=b8185
+
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS build
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG LLAMA_CPP_REF
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      cmake \
+      curl \
+      git \
+      ninja-build && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone https://github.com/ggml-org/llama.cpp.git && \
+    cd llama.cpp && \
+    git checkout "${LLAMA_CPP_REF}"
+
+WORKDIR /opt/llama.cpp
+RUN cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_CUDA=ON \
+      -DGGML_NATIVE=OFF \
+      -DLLAMA_BUILD_SERVER=ON \
+      -DBUILD_SHARED_LIBS=OFF && \
+    cmake --build build --target llama-server -j"$(nproc)"
+
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+
+RUN mkdir -p /opt/muse /app/chat-template /runtime
+
+WORKDIR /app
+
+ENTRYPOINT ["llama-server"]

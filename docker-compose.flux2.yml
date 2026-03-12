@@ -1,0 +1,36 @@
+services:
+  flux2-image-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.flux2
+      args:
+        CUDA_ARCH: ${CUDA_ARCH:-121}
+    image: muse/flux2-image-server:local
+    gpus: all
+    environment:
+      MODEL_ROOT: /models
+      FLUX2_KLEIN_PROFILE: ${FLUX2_KLEIN_PROFILE:-9b-fp8}
+      HF_TOKEN: ${HF_TOKEN:-}
+      LISTEN_IP: ${LISTEN_IP:-0.0.0.0}
+      LISTEN_PORT: ${LISTEN_PORT:-1234}
+      CFG_SCALE: ${CFG_SCALE:-1.0}
+      SAMPLING_METHOD: ${SAMPLING_METHOD:-euler}
+      STEPS: ${STEPS:-4}
+      OFFLOAD_TO_CPU: ${OFFLOAD_TO_CPU:-false}
+      DIFFUSION_MODEL: ${DIFFUSION_MODEL:-}
+      VAE_MODEL: ${VAE_MODEL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      SDCPP_EXTRA_FLAGS: ${SDCPP_EXTRA_FLAGS:-}
+      DOWNLOAD_ONLY: ${DOWNLOAD_ONLY:-false}
+    ports:
+      - "127.0.0.1:${LISTEN_PORT:-1234}:${LISTEN_PORT:-1234}"
+    volumes:
+      - ${MODEL_ROOT_HOST:-./models}:/models
+      - ${RUN_ROOT_HOST:-./runtime/flux2_klein_server}:/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${LISTEN_PORT:-1234}/v1/models >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 20s

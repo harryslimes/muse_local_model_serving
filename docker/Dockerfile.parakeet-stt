@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+#
+# Parakeet TDT 0.6B v2 — Speech-to-Text server (ONNX Runtime)
+#
+# Uses onnx-asr for lightweight inference without NeMo.
+# Model weights are downloaded on first startup.
+# Compatible with aarch64 (Jetson/GB10) and x86_64.
+
+ARG CUDA_VERSION=12.4.1
+ARG UBUNTU_VERSION=22.04
+
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3 \
+      python3-pip \
+      python3-dev \
+      libsndfile1 \
+      ffmpeg \
+      curl \
+      ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir \
+    onnxruntime \
+    onnx-asr \
+    huggingface_hub \
+    fastapi \
+    "uvicorn[standard]" \
+    soundfile \
+    numpy
+
+COPY docker/parakeet_stt_server.py /opt/muse/parakeet_stt_server.py
+
+WORKDIR /opt/muse
+EXPOSE 4124
+
+CMD ["python3", "parakeet_stt_server.py"]

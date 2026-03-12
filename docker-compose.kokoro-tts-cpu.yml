@@ -1,0 +1,24 @@
+services:
+  kokoro-tts:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.kokoro-tts-cpu
+    image: muse/kokoro-tts-cpu:local
+    environment:
+      LISTEN_PORT: ${KOKORO_PORT:-4125}
+      KOKORO_DEFAULT_LANG: ${KOKORO_DEFAULT_LANG:-a}
+      KOKORO_DEVICE: cpu
+    ports:
+      - "${KOKORO_BIND_IP:-127.0.0.1}:${KOKORO_PORT:-4125}:${KOKORO_PORT:-4125}"
+    volumes:
+      - kokoro-hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${KOKORO_PORT:-4125}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+volumes:
+  kokoro-hf-cache:

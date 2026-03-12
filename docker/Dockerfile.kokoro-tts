@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# Kokoro — Lightweight TTS server (82M parameters)
+#
+# Uses NVIDIA NGC PyTorch container for GPU support.
+# Much lighter than Chatterbox — uses built-in voices (no voice cloning).
+
+FROM nvcr.io/nvidia/pytorch:25.05-py3
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# espeak-ng is required by Kokoro for phonemization
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libsndfile1 \
+      espeak-ng && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir \
+    "kokoro>=0.9.4" \
+    soundfile \
+    fastapi \
+    "uvicorn[standard]"
+
+# Install optional language support (Japanese + Chinese)
+RUN pip3 install --no-cache-dir \
+    "misaki[ja]" \
+    "misaki[zh]" || true
+
+COPY docker/kokoro_tts_server.py /opt/muse/kokoro_tts_server.py
+
+WORKDIR /opt/muse
+EXPOSE 4125
+
+CMD ["python3", "kokoro_tts_server.py"]

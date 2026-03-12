@@ -1,0 +1,74 @@
+{#- Custom chat template used by the OpenClaw Qwen3.5 setup. -#}
+{%- if tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content }}
+    {%- else %}
+        {{- 'You are Qwen, created by Alibaba Cloud. You are a helpful assistant.' }}
+    {%- endif %}
+    {{- "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- else %}
+        {{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- set ns = namespace(multi_tool=true, last_query_index=messages|length - 1) %}
+{%- for i in range(messages|length - 1, -1, -1) %}
+    {%- if messages[i].role == "user" %}
+        {%- set ns.last_query_index = i %}
+        {%- break %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set content = message.content %}
+        {%- if message.tool_calls %}
+            {%- if content is none %}
+                {%- set content = '' %}
+            {%- endif %}
+            {{- '<|im_start|>' + message.role + '\n' + content }}
+            {%- for tool_call in message.tool_calls %}
+                {%- if tool_call.function is defined %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '\n<tool_call>\n{"name": "' }}
+                {{- tool_call.name }}
+                {{- '", "arguments": ' }}
+                {{- tool_call.arguments | tojson }}
+                {{- '}\n</tool_call>' }}
+            {%- endfor %}
+            {{- '<|im_end|>\n' }}
+        {%- else %}
+            {%- if (loop.index0 > ns.last_query_index) and enable_thinking is defined and enable_thinking is false %}
+                {{- '<|im_start|>' + message.role + '\n<think>\n\n</think>\n\n' + content + '<|im_end|>\n' }}
+            {%- else %}
+                {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>\n' }}
+            {%- endif %}
+        {%- endif %}
+    {%- elif message.role == "tool" %}
+        {%- set tool_content = message.content %}
+        {%- if tool_content is defined and tool_content is not string %}
+            {%- set tool_content = tool_content | tojson %}
+        {%- endif %}
+        {%- if ns.multi_tool %}
+            {{- '<|im_start|>user\n<tool_response>\n' + tool_content + '\n</tool_response><|im_end|>\n' }}
+        {%- else %}
+            {{- '<|im_start|>user\n<tool_response>\n{"name": "' + message.name + '", "content": ' + tool_content + '}\n</tool_response><|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- endif %}
+{%- endif %}
