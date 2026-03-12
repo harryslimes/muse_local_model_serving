@@ -41,46 +41,39 @@ start_local_llm_server_override=""
 start_voice_server_override=""
 start_voice_stt_override=""
 start_voice_tts_override=""
+start_backend_override=""
+start_frontend_override=""
 
 print_usage() {
   cat <<'EOF'
 Usage:
   ./restart_dev.sh [options]
 
-Options:
-  --reset-db                    Reset backend DB by running muse_backend/reset_db.sh
-                                (prompts for CONFIRM).
-  --with-local-image-server     Also restart local image generation server.
-  --without-local-image-server  Do not start local image server (overrides .env).
-  --with-local-llm-server       Restart the local LLM server stack.
-  --without-local-llm-server    Leave the local LLM server stack untouched.
-  --with-voice-server           Also start/restart Parakeet STT + Chatterbox TTS.
-  --without-voice-server        Do not start voice servers (overrides auto-detection).
-  --with-voice-stt              Start/restart only Parakeet STT (no TTS).
-  --without-voice-stt           Do not start Parakeet STT.
-  --with-voice-tts              Start/restart only Chatterbox TTS + Kokoro TTS (no STT).
-  --without-voice-tts           Do not start TTS servers.
+Which services start is controlled by ENABLE_* flags in .env:
+  ENABLE_BACKEND=true/false     Start backend (Postgres + uvicorn). Default: true
+  ENABLE_FRONTEND=true/false    Start frontend (npm dev server). Default: true
+  ENABLE_IMAGE_SERVER=true/false  Start local image gen server. Default: false
+  ENABLE_LLM_SERVER=true/false  Start local LLM server. Default: false
+  ENABLE_VOICE_STT=true/false   Start Parakeet STT. Default: false
+  ENABLE_VOICE_TTS=true/false   Start Kokoro + Chatterbox TTS. Default: false
+
+CLI flags override .env settings:
+  --reset-db                    Reset backend DB (prompts for CONFIRM).
+  --with-backend / --without-backend
+  --with-frontend / --without-frontend
+  --with-local-image-server / --without-local-image-server
+  --with-local-llm-server / --without-local-llm-server
+  --with-voice-server / --without-voice-server   (STT + TTS together)
+  --with-voice-stt / --without-voice-stt
+  --with-voice-tts / --without-voice-tts
   -h, --help                    Show this help.
 
-Notes:
-  - Primary source of local image settings is muse_backend/.env:
-      IMAGE_GEN_PROVIDER, LOCAL_IMAGE_GEN_BASE_URL, LOCAL_IMAGE_GEN_MODEL
-  - If provider=local_sdcpp, local image server starts by default unless
-    --without-local-image-server is used.
-  - Legacy env vars in muse_backend/.env are still supported as fallback:
-      USE_LOCAL_IMAGE_GEN_SERVER, LOCAL_IMAGE_GEN_BASE_URL,
-      LOCAL_IMAGE_SERVER_DOCKER_COMPOSE_FILE, LOCAL_IMAGE_SERVER_DOCKER_SERVICE_NAME,
-      LOCAL_IMAGE_SERVER_DOCKER_PROJECT_NAME, LOCAL_IMAGE_SERVER_DIFFUSION_MODEL,
-      LOCAL_IMAGE_SERVER_VAE_MODEL, LOCAL_IMAGE_SERVER_LLM_MODEL, FLUX2_KLEIN_PROFILE
-  - Optional: set LOCAL_IMAGE_SERVER_READY_TIMEOUT_SECONDS (default: 1200)
-    to control how long restart waits for local image server readiness.
-  - Optional: set LOCAL_LLM_SERVER_READY_TIMEOUT_SECONDS (default: 1800)
-    to control how long restart waits for local LLM server readiness when
-    --with-local-llm-server is used.
-  - Without --with-local-llm-server, restart_dev leaves the existing local
-    LLM server alone when it is already healthy. If the backend is configured
-    to use provider=local and the local LLM endpoint is down, restart_dev
-    starts it automatically.
+Voice-only example (.env):
+  ENABLE_BACKEND=false
+  ENABLE_FRONTEND=false
+  ENABLE_VOICE_STT=true
+  ENABLE_VOICE_TTS=true
+  KOKORO_PROVIDER=cpu
 EOF
 }
 
@@ -298,6 +291,22 @@ while [[ $# -gt 0 ]]; do
       start_voice_tts_override="false"
       shift
       ;;
+    --with-backend)
+      start_backend_override="true"
+      shift
+      ;;
+    --without-backend)
+      start_backend_override="false"
+      shift
+      ;;
+    --with-frontend)
+      start_frontend_override="true"
+      shift
+      ;;
+    --without-frontend)
+      start_frontend_override="false"
+      shift
+      ;;
     -h|--help)
       print_usage
       exit 0
@@ -309,6 +318,92 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ---------------------------------------------------------------------------
+# Read ENABLE_* flags from local .env — these control which services start.
+# CLI flags override these values.
+# ---------------------------------------------------------------------------
+_enable_flag() {
+  local key="$1" default="$2" override_var="$3"
+  # CLI override takes priority
+  if [[ -n "${!override_var:-}" ]]; then
+    echo "${!override_var}"
+    return
+  fi
+  # Read from local .env
+  local val=""
+  val="$(resolve_env_bool "$ENV_FILE" "$key")"
+  if [[ -n "${val:-}" ]]; then
+    if is_truthy "$val"; then echo "true"; else echo "false"; fi
+    return
+  fi
+  echo "$default"
+}
+
+enable_backend="$(_enable_flag ENABLE_BACKEND true start_backend_override)"
+enable_frontend="$(_enable_flag ENABLE_FRONTEND true start_frontend_override)"
+enable_image_server="$(_enable_flag ENABLE_IMAGE_SERVER false start_local_image_server_override)"
+enable_llm_server="$(_enable_flag ENABLE_LLM_SERVER false start_local_llm_server_override)"
+
+# Voice: --with-voice-server sets both STT+TTS, individual flags override.
+_voice_stt_default="false"
+_voice_tts_default="false"
+if [[ "${start_voice_server_override:-}" == "true" ]]; then
+  _voice_stt_default="true"
+  _voice_tts_default="true"
+elif [[ "${start_voice_server_override:-}" == "false" ]]; then
+  _voice_stt_default="false"
+  _voice_tts_default="false"
+else
+  _voice_stt_default="$(_enable_flag ENABLE_VOICE_STT false start_voice_stt_override)"
+  _voice_tts_default="$(_enable_flag ENABLE_VOICE_TTS false start_voice_tts_override)"
+fi
+# Individual CLI overrides still take precedence over --with-voice-server.
+if [[ -n "${start_voice_stt_override:-}" ]]; then
+  enable_voice_stt="${start_voice_stt_override}"
+else
+  enable_voice_stt="${_voice_stt_default}"
+fi
+if [[ -n "${start_voice_tts_override:-}" ]]; then
+  enable_voice_tts="${start_voice_tts_override}"
+else
+  enable_voice_tts="${_voice_tts_default}"
+fi
+
+echo "Service plan:"
+echo "  Backend:      ${enable_backend}"
+echo "  Frontend:     ${enable_frontend}"
+echo "  Image server: ${enable_image_server}"
+echo "  LLM server:   ${enable_llm_server}"
+echo "  Voice STT:    ${enable_voice_stt}"
+echo "  Voice TTS:    ${enable_voice_tts}"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Helper: read config value from local .env first, then backend .env fallback.
+# ---------------------------------------------------------------------------
+resolve_config_value() {
+  local key="$1"
+  local val=""
+  # Try local .env first
+  val="$(resolve_env_value "$ENV_FILE" "$key")"
+  val="$(trim_env_value "${val:-}")"
+  if [[ -n "${val:-}" ]]; then
+    echo "$val"
+    return
+  fi
+  # Fallback to backend .env if backend dir exists
+  if [[ -f "$BACKEND_DIR/.env" ]]; then
+    val="$(resolve_env_value "$BACKEND_DIR/.env" "$key")"
+    val="$(trim_env_value "${val:-}")"
+  fi
+  echo "${val:-}"
+}
+
+if [[ "$reset_db" == "true" ]] && [[ "$enable_backend" != "true" ]]; then
+  echo "Warning: --reset-db ignored because backend is disabled."
+  reset_db="false"
+fi
 
 if [[ "$reset_db" == "true" ]]; then
   if [[ ! -x "$BACKEND_DIR/reset_db.sh" ]]; then
@@ -335,6 +430,17 @@ if [[ "$reset_db" == "true" ]]; then
     ./reset_db.sh <<< "CONFIRM"
   )
 fi
+
+# ---------------------------------------------------------------------------
+# Image server + LLM server config (skip entirely when neither is enabled)
+# ---------------------------------------------------------------------------
+start_local_image_server="false"
+start_local_llm_server="false"
+local_image_server_models_url=""
+local_llm_models_url=""
+local_llm_should_check_health="false"
+
+if [[ "$enable_image_server" == "true" ]] || [[ "$enable_llm_server" == "true" ]]; then
 
 image_gen_provider="$(resolve_env_value "$BACKEND_DIR/.env" "IMAGE_GEN_PROVIDER")"
 image_gen_provider="$(trim_env_value "${image_gen_provider:-}")"
@@ -565,55 +671,73 @@ if [[ "$compose_basename" == "docker-compose.flux2-klein-9b-gguf.yml" ]]; then
   fi
 fi
 
-if [[ -n "${start_local_image_server_override:-}" ]]; then
-  start_local_image_server="$start_local_image_server_override"
+start_local_image_server="$enable_image_server"
+
+fi  # end image/LLM config block
+
+# ---------------------------------------------------------------------------
+# Stop old dev servers (only relevant ones)
+# ---------------------------------------------------------------------------
+if [[ "$enable_backend" == "true" ]]; then
+  echo "Stopping old dev servers..."
+  kill_from_pid_file "$BACKEND_PID_FILE" "backend"
+  kill_listeners_on_port 8000 "backend"
+fi
+if [[ "$enable_frontend" == "true" ]]; then
+  kill_from_pid_file "$FRONTEND_PID_FILE" "frontend"
+  kill_listeners_on_port 5173 "frontend"
 fi
 
-if [[ -n "${start_local_llm_server_override:-}" ]]; then
-  start_local_llm_server="$start_local_llm_server_override"
-fi
-
-echo "Stopping old dev servers..."
-kill_from_pid_file "$BACKEND_PID_FILE" "backend"
-kill_from_pid_file "$FRONTEND_PID_FILE" "frontend"
-kill_listeners_on_port 8000 "backend"
-kill_listeners_on_port 5173 "frontend"
-
-echo "Starting Postgres..."
-(
-  cd "$BACKEND_DIR"
-  docker compose up -d db
-)
-wait_for_db_health
-
-if [[ ! -d "$BACKEND_DIR/.venv" ]]; then
-  echo "Creating backend virtualenv with uv sync..."
+# ---------------------------------------------------------------------------
+# Backend: Postgres, venv, migrations
+# ---------------------------------------------------------------------------
+if [[ "$enable_backend" == "true" ]]; then
+  echo "Starting Postgres..."
   (
     cd "$BACKEND_DIR"
-    uv sync
+    docker compose up -d db
   )
-fi
+  wait_for_db_health
 
-if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
-  echo "Installing frontend dependencies..."
+  if [[ ! -d "$BACKEND_DIR/.venv" ]]; then
+    echo "Creating backend virtualenv with uv sync..."
+    (
+      cd "$BACKEND_DIR"
+      uv sync
+    )
+  fi
+
+  echo "Running database migrations..."
   (
-    cd "$FRONTEND_DIR"
-    npm install
+    cd "$BACKEND_DIR"
+    uv run alembic upgrade head
   )
 fi
 
-if [[ -d "$FRONTEND_DIR/node_modules/.bin" ]]; then
-  chmod +x "$FRONTEND_DIR"/node_modules/.bin/* 2>/dev/null || true
+# ---------------------------------------------------------------------------
+# Frontend: npm install
+# ---------------------------------------------------------------------------
+if [[ "$enable_frontend" == "true" ]]; then
+  if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+    echo "Installing frontend dependencies..."
+    (
+      cd "$FRONTEND_DIR"
+      npm install
+    )
+  fi
+
+  if [[ -d "$FRONTEND_DIR/node_modules/.bin" ]]; then
+    chmod +x "$FRONTEND_DIR"/node_modules/.bin/* 2>/dev/null || true
+  fi
 fi
 
-echo "Running database migrations..."
-(
-  cd "$BACKEND_DIR"
-  uv run alembic upgrade head
-)
-
-resolve_effective_local_llm_from_backend
-if [[ -z "${start_local_llm_server_override:-}" ]]; then
+# ---------------------------------------------------------------------------
+# LLM server auto-detection (only when backend is enabled)
+# ---------------------------------------------------------------------------
+if [[ "$enable_backend" == "true" ]]; then
+  resolve_effective_local_llm_from_backend
+fi
+if [[ "$enable_llm_server" == "true" ]]; then
   if [[ "${default_llm_provider:-}" == "local" ]] && is_local_host_url "$local_llm_api_base_url"; then
     if wait_for_http "${local_llm_models_url}" "Local LLM server" 2; then
       start_local_llm_server="false"
@@ -623,10 +747,8 @@ if [[ -z "${start_local_llm_server_override:-}" ]]; then
       echo "Local LLM server is not healthy at ${local_llm_models_url}; starting it."
     fi
   else
-    start_local_llm_server="false"
+    start_local_llm_server="true"
   fi
-elif [[ "$start_local_llm_server_override" == "false" ]] && [[ "${default_llm_provider:-}" == "local" ]] && is_local_host_url "$local_llm_api_base_url"; then
-  local_llm_should_check_health="true"
 fi
 
 if [[ "$start_local_image_server" == "true" ]]; then
@@ -738,58 +860,28 @@ fi
 
 voice_stt_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.parakeet-stt.yml"
 voice_tts_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.chatterbox-tts.yml"
-kokoro_provider="$(resolve_env_value "$BACKEND_DIR/.env" "KOKORO_PROVIDER")"
-kokoro_provider="$(trim_env_value "${kokoro_provider:-gpu}")"
+kokoro_provider="$(resolve_config_value "KOKORO_PROVIDER")"
+kokoro_provider="${kokoro_provider:-gpu}"
 if [[ "$kokoro_provider" == "cpu" ]]; then
   voice_kokoro_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.kokoro-tts-cpu.yml"
 else
   voice_kokoro_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.kokoro-tts.yml"
 fi
 
-parakeet_stt_url="$(resolve_env_value "$BACKEND_DIR/.env" "PARAKEET_STT_URL")"
-parakeet_stt_url="$(trim_env_value "${parakeet_stt_url:-}")"
-if [[ -z "${parakeet_stt_url:-}" ]]; then
-  parakeet_stt_url="http://127.0.0.1:4124"
-fi
+parakeet_stt_url="$(resolve_config_value "PARAKEET_STT_URL")"
+parakeet_stt_url="${parakeet_stt_url:-http://127.0.0.1:4124}"
 
-chatterbox_tts_url="$(resolve_env_value "$BACKEND_DIR/.env" "CHATTERBOX_TTS_URL")"
-chatterbox_tts_url="$(trim_env_value "${chatterbox_tts_url:-}")"
-if [[ -z "${chatterbox_tts_url:-}" ]]; then
-  chatterbox_tts_url="http://127.0.0.1:4123"
-fi
+chatterbox_tts_url="$(resolve_config_value "CHATTERBOX_TTS_URL")"
+chatterbox_tts_url="${chatterbox_tts_url:-http://127.0.0.1:4123}"
 
-kokoro_tts_url="$(resolve_env_value "$BACKEND_DIR/.env" "KOKORO_TTS_URL")"
-kokoro_tts_url="$(trim_env_value "${kokoro_tts_url:-}")"
-if [[ -z "${kokoro_tts_url:-}" ]]; then
-  kokoro_tts_url="http://127.0.0.1:4125"
-fi
-
-start_voice_stt="false"
-start_voice_tts="false"
-if [[ "${start_voice_server_override:-}" == "true" ]]; then
-  start_voice_stt="true"
-  start_voice_tts="true"
-elif [[ "${start_voice_server_override:-}" == "false" ]]; then
-  start_voice_stt="false"
-  start_voice_tts="false"
-fi
-# Individual overrides take precedence over --with/without-voice-server.
-if [[ "${start_voice_stt_override:-}" == "true" ]]; then
-  start_voice_stt="true"
-elif [[ "${start_voice_stt_override:-}" == "false" ]]; then
-  start_voice_stt="false"
-fi
-if [[ "${start_voice_tts_override:-}" == "true" ]]; then
-  start_voice_tts="true"
-elif [[ "${start_voice_tts_override:-}" == "false" ]]; then
-  start_voice_tts="false"
-fi
+kokoro_tts_url="$(resolve_config_value "KOKORO_TTS_URL")"
+kokoro_tts_url="${kokoro_tts_url:-http://127.0.0.1:4125}"
 
 voice_stt_health_url="${parakeet_stt_url%/}/health"
 voice_tts_health_url="${chatterbox_tts_url%/}/health"
 voice_kokoro_health_url="${kokoro_tts_url%/}/health"
 
-if [[ "$start_voice_stt" == "true" ]]; then
+if [[ "$enable_voice_stt" == "true" ]]; then
   echo "Starting Parakeet STT..."
   (
     cd "$LOCAL_MODEL_SERVING_DIR"
@@ -805,7 +897,7 @@ if [[ "$start_voice_stt" == "true" ]]; then
   fi
 fi
 
-if [[ "$start_voice_tts" == "true" ]]; then
+if [[ "$enable_voice_tts" == "true" ]]; then
   echo "Starting TTS servers (Chatterbox + Kokoro)..."
   (
     cd "$LOCAL_MODEL_SERVING_DIR"
@@ -832,39 +924,48 @@ if [[ "$start_voice_tts" == "true" ]]; then
   fi
 fi
 
-echo "Starting backend..."
-: >"$BACKEND_LOG"
-setsid -f bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload </dev/null >>'$BACKEND_LOG' 2>&1"
-
-echo "Starting frontend..."
-: >"$FRONTEND_LOG"
-setsid -f bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >>'$FRONTEND_LOG' 2>&1"
-
-wait_for_http "http://127.0.0.1:8000/docs" "Backend" || exit 1
-wait_for_http "http://127.0.0.1:5173/" "Frontend" || exit 1
-
-backend_pid="$(pid_for_listening_port 8000)"
-frontend_pid="$(pid_for_listening_port 5173)"
-if [[ -n "${backend_pid:-}" ]]; then
-  echo "$backend_pid" >"$BACKEND_PID_FILE"
-fi
-if [[ -n "${frontend_pid:-}" ]]; then
-  echo "$frontend_pid" >"$FRONTEND_PID_FILE"
+if [[ "$enable_backend" == "true" ]]; then
+  echo "Starting backend..."
+  : >"$BACKEND_LOG"
+  setsid -f bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload </dev/null >>'$BACKEND_LOG' 2>&1"
+  wait_for_http "http://127.0.0.1:8000/docs" "Backend" || exit 1
+  backend_pid="$(pid_for_listening_port 8000)"
+  if [[ -n "${backend_pid:-}" ]]; then
+    echo "$backend_pid" >"$BACKEND_PID_FILE"
+  fi
 fi
 
+if [[ "$enable_frontend" == "true" ]]; then
+  echo "Starting frontend..."
+  : >"$FRONTEND_LOG"
+  setsid -f bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >>'$FRONTEND_LOG' 2>&1"
+  wait_for_http "http://127.0.0.1:5173/" "Frontend" || exit 1
+  frontend_pid="$(pid_for_listening_port 5173)"
+  if [[ -n "${frontend_pid:-}" ]]; then
+    echo "$frontend_pid" >"$FRONTEND_PID_FILE"
+  fi
+fi
+
+echo ""
 echo "Restart complete."
-echo "Backend:  http://127.0.0.1:8000/docs"
-echo "Frontend: http://127.0.0.1:5173/"
+if [[ "$enable_backend" == "true" ]]; then
+  echo "Backend:  http://127.0.0.1:8000/docs"
+fi
+if [[ "$enable_frontend" == "true" ]]; then
+  echo "Frontend: http://127.0.0.1:5173/"
+fi
 if [[ "$start_local_image_server" == "true" ]]; then
   echo "Image server: ${local_image_server_models_url}"
 fi
-if [[ "$start_voice_stt" == "true" ]]; then
+if [[ "$enable_voice_stt" == "true" ]]; then
   echo "Voice STT:       ${parakeet_stt_url}"
 fi
-if [[ "$start_voice_tts" == "true" ]]; then
+if [[ "$enable_voice_tts" == "true" ]]; then
   echo "Voice TTS (CB):  ${chatterbox_tts_url}"
   echo "Voice TTS (KK):  ${kokoro_tts_url} (${kokoro_provider})"
 fi
-echo "Logs:"
-echo "  $BACKEND_LOG"
-echo "  $FRONTEND_LOG"
+if [[ "$enable_backend" == "true" ]]; then
+  echo "Logs:"
+  echo "  $BACKEND_LOG"
+  echo "  $FRONTEND_LOG"
+fi
