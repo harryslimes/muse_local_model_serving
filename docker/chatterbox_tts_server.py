@@ -2,15 +2,18 @@
 """Chatterbox-Turbo — FastAPI TTS server with voice cloning support.
 
 Exposes:
-  POST /synthesize  — text → PCM16 24kHz mono audio
-  GET  /voices      — list available voice reference clips
-  POST /voices/upload — upload a new voice reference clip
-  GET  /health      — health check
+  POST /v1/audio/speech — OpenAI-compatible TTS endpoint (returns WAV)
+  POST /synthesize      — text → PCM16 24kHz mono audio
+  GET  /voices          — list available voice reference clips
+  POST /voices/upload   — upload a new voice reference clip
+  GET  /health          — health check
 """
 
+import io
 import json
 import os
 import shutil
+import struct
 from pathlib import Path
 
 # Must be set before importing torch — GB10 (sm_121) needs NVFuser disabled
@@ -222,6 +225,84 @@ async def synthesize(request: Request):
             "X-Sample-Width": "2",
         },
     )
+
+
+def _pcm16_to_wav(pcm_data: bytes, sample_rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
+    """Wrap raw PCM16 bytes in a WAV container."""
+    data_size = len(pcm_data)
+    buf = io.BytesIO()
+    # RIFF header
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE")
+    # fmt chunk
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))  # chunk size
+    buf.write(struct.pack("<HHIIHH", 1, channels, sample_rate,
+                          sample_rate * channels * sample_width,
+                          channels * sample_width, sample_width * 8))
+    # data chunk
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
+    buf.write(pcm_data)
+    return buf.getvalue()
+
+
+@app.post("/v1/audio/speech")
+async def openai_speech(request: Request):
+    """OpenAI-compatible TTS endpoint.
+
+    JSON body:
+      {"model": "chatterbox", "input": "Hello", "voice": "default", "response_format": "wav"}
+
+    Returns: WAV audio (audio/wav).
+    """
+    body = await request.json()
+    text = body.get("input", "")
+    voice_id = body.get("voice", "default")
+
+    if not text.strip():
+        return JSONResponse({"error": {"message": "Empty input"}}, status_code=400)
+
+    audio_prompt_path = _resolve_voice_path(voice_id)
+    if audio_prompt_path:
+        if voice_id in _conds_cache:
+            _model.conds = _conds_cache[voice_id]
+        else:
+            _model.prepare_conditionals(str(audio_prompt_path))
+            _conds_cache[voice_id] = _model.conds
+
+    import time as _time
+    t0 = _time.monotonic()
+    cache_hit = voice_id in _conds_cache
+
+    try:
+        wav = _model.generate(text)
+    except Exception as e:
+        return JSONResponse({"error": {"message": f"Generation failed: {e}"}}, status_code=500)
+
+    gen_ms = round((_time.monotonic() - t0) * 1000, 1)
+
+    if isinstance(wav, torch.Tensor):
+        audio_np = wav.squeeze().cpu().numpy()
+    else:
+        audio_np = np.array(wav, dtype=np.float32)
+
+    peak = np.abs(audio_np).max()
+    if peak > 0:
+        audio_np = audio_np / peak * 0.95
+
+    pcm16 = (audio_np * 32767).astype(np.int16)
+    audio_dur_ms = round(len(pcm16) / _output_sample_rate * 1000, 1)
+
+    print(
+        f"[TTS] text={len(text)}ch gen={gen_ms}ms audio={audio_dur_ms}ms "
+        f"cache={'hit' if cache_hit else 'miss'} voice={voice_id} endpoint=v1/audio/speech",
+        flush=True,
+    )
+
+    wav_bytes = _pcm16_to_wav(pcm16.tobytes(), _output_sample_rate)
+    return Response(content=wav_bytes, media_type="audio/wav")
 
 
 if __name__ == "__main__":

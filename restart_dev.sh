@@ -882,45 +882,70 @@ voice_tts_health_url="${chatterbox_tts_url%/}/health"
 voice_kokoro_health_url="${kokoro_tts_url%/}/health"
 
 if [[ "$enable_voice_stt" == "true" ]]; then
-  echo "Starting Parakeet STT..."
-  (
-    cd "$LOCAL_MODEL_SERVING_DIR"
-    if [[ -f "$voice_stt_compose_file" ]]; then
-      docker compose -f "$voice_stt_compose_file" up -d --build
-    else
-      echo "  Warning: STT compose file not found: $voice_stt_compose_file"
+  if wait_for_http "$voice_stt_health_url" "Parakeet STT" 2; then
+    echo "Parakeet STT already healthy at ${parakeet_stt_url}; leaving it untouched."
+  else
+    echo "Starting Parakeet STT..."
+    (
+      cd "$LOCAL_MODEL_SERVING_DIR"
+      if [[ -f "$voice_stt_compose_file" ]]; then
+        docker compose -f "$voice_stt_compose_file" up -d --build
+      else
+        echo "  Warning: STT compose file not found: $voice_stt_compose_file"
+      fi
+    )
+    echo "  Waiting for Parakeet STT to become ready..."
+    if ! wait_for_http "$voice_stt_health_url" "Parakeet STT" 120; then
+      echo "  Warning: Parakeet STT did not become ready in time; continuing."
     fi
-  )
-  echo "  Waiting for Parakeet STT to become ready..."
-  if ! wait_for_http "$voice_stt_health_url" "Parakeet STT" 120; then
-    echo "  Warning: Parakeet STT did not become ready in time; continuing."
   fi
 fi
 
 if [[ "$enable_voice_tts" == "true" ]]; then
-  echo "Starting TTS servers (Chatterbox + Kokoro)..."
-  (
-    cd "$LOCAL_MODEL_SERVING_DIR"
-    if [[ -f "$voice_tts_compose_file" ]]; then
-      echo "  Building & starting Chatterbox TTS..."
-      docker compose -f "$voice_tts_compose_file" up -d --build
-    else
-      echo "  Warning: Chatterbox TTS compose file not found: $voice_tts_compose_file"
-    fi
-    if [[ -f "$voice_kokoro_compose_file" ]]; then
-      echo "  Building & starting Kokoro TTS..."
-      docker compose -f "$voice_kokoro_compose_file" up -d --build
-    else
-      echo "  Warning: Kokoro TTS compose file not found: $voice_kokoro_compose_file"
-    fi
-  )
-  echo "  Waiting for Chatterbox TTS to become ready (model loading may take a while)..."
-  if ! wait_for_http "$voice_tts_health_url" "Chatterbox TTS" 180; then
-    echo "  Warning: Chatterbox TTS did not become ready in time; continuing."
+  chatterbox_already_healthy="false"
+  kokoro_already_healthy="false"
+  if wait_for_http "$voice_tts_health_url" "Chatterbox TTS" 2; then
+    chatterbox_already_healthy="true"
+    echo "Chatterbox TTS already healthy at ${chatterbox_tts_url}; leaving it untouched."
   fi
-  echo "  Waiting for Kokoro TTS to become ready..."
-  if ! wait_for_http "$voice_kokoro_health_url" "Kokoro TTS" 120; then
-    echo "  Warning: Kokoro TTS did not become ready in time; continuing."
+  if wait_for_http "$voice_kokoro_health_url" "Kokoro TTS" 2; then
+    kokoro_already_healthy="true"
+    echo "Kokoro TTS already healthy at ${kokoro_tts_url}; leaving it untouched."
+  fi
+
+  if [[ "$chatterbox_already_healthy" == "false" ]] || [[ "$kokoro_already_healthy" == "false" ]]; then
+    echo "Starting TTS servers..."
+    (
+      cd "$LOCAL_MODEL_SERVING_DIR"
+      if [[ "$chatterbox_already_healthy" == "false" ]]; then
+        if [[ -f "$voice_tts_compose_file" ]]; then
+          echo "  Building & starting Chatterbox TTS..."
+          docker compose -f "$voice_tts_compose_file" up -d --build
+        else
+          echo "  Warning: Chatterbox TTS compose file not found: $voice_tts_compose_file"
+        fi
+      fi
+      if [[ "$kokoro_already_healthy" == "false" ]]; then
+        if [[ -f "$voice_kokoro_compose_file" ]]; then
+          echo "  Building & starting Kokoro TTS..."
+          docker compose -f "$voice_kokoro_compose_file" up -d --build
+        else
+          echo "  Warning: Kokoro TTS compose file not found: $voice_kokoro_compose_file"
+        fi
+      fi
+    )
+    if [[ "$chatterbox_already_healthy" == "false" ]]; then
+      echo "  Waiting for Chatterbox TTS to become ready (model loading may take a while)..."
+      if ! wait_for_http "$voice_tts_health_url" "Chatterbox TTS" 180; then
+        echo "  Warning: Chatterbox TTS did not become ready in time; continuing."
+      fi
+    fi
+    if [[ "$kokoro_already_healthy" == "false" ]]; then
+      echo "  Waiting for Kokoro TTS to become ready..."
+      if ! wait_for_http "$voice_kokoro_health_url" "Kokoro TTS" 120; then
+        echo "  Warning: Kokoro TTS did not become ready in time; continuing."
+      fi
+    fi
   fi
 fi
 
