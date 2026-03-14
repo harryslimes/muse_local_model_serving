@@ -116,6 +116,38 @@ Environment overrides:
 Container config file:
 - `docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml`
 
+## Tool Server (Docker — SearXNG + crawl4ai)
+
+Compose stack providing web search and web crawl endpoints for companion tool calling:
+- **SearXNG** — privacy-respecting meta search engine
+- **crawl4ai** — headless Chromium web crawler returning markdown
+
+Build + start:
+- `docker compose -f docker-compose.tool-server.yml up -d --build`
+
+Or via `restart_dev.sh`:
+- `./restart_dev.sh --with-tool-server`
+- Or set `ENABLE_TOOL_SERVER=true` in `.env`
+
+Verify:
+- `curl http://127.0.0.1:4130/health`
+- `curl http://127.0.0.1:4130/tools`
+
+Endpoints:
+- `POST /tools/search` — `{"query": "..."}` → search results via SearXNG
+- `POST /tools/crawl` — `{"url": "..."}` → page content as markdown
+
+Environment overrides:
+- `TOOL_SERVER_PORT` (default: `4130`)
+- `SEARXNG_PORT` (default: `8888`)
+- `CRAWL_MAX_CHARS` (default: `8000`)
+- `SEARCH_MAX_RESULTS` (default: `5`)
+
+Container config files:
+- `docker-compose.tool-server.yml`
+- `docker/Dockerfile.tool-server`
+- `docker/tool_server.py`
+
 ## CosyVoice 3.0 TTS (Docker, Streaming)
 
 Compose stack for FunAudioLLM CosyVoice 3.0:
