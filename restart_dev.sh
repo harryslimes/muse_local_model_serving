@@ -43,6 +43,7 @@ start_voice_stt_override=""
 start_voice_tts_override=""
 start_backend_override=""
 start_frontend_override=""
+start_tool_server_override=""
 
 print_usage() {
   cat <<'EOF'
@@ -56,6 +57,7 @@ Which services start is controlled by ENABLE_* flags in .env:
   ENABLE_LLM_SERVER=true/false  Start local LLM server. Default: false
   ENABLE_VOICE_STT=true/false   Start Parakeet STT. Default: false
   ENABLE_VOICE_TTS=true/false   Start Kokoro + Chatterbox TTS. Default: false
+  ENABLE_TOOL_SERVER=true/false Start tool server (SearXNG + crawl). Default: false
 
 CLI flags override .env settings:
   --reset-db                    Reset backend DB (prompts for CONFIRM).
@@ -66,6 +68,7 @@ CLI flags override .env settings:
   --with-voice-server / --without-voice-server   (STT + TTS together)
   --with-voice-stt / --without-voice-stt
   --with-voice-tts / --without-voice-tts
+  --with-tool-server / --without-tool-server
   -h, --help                    Show this help.
 
 Voice-only example (.env):
@@ -206,7 +209,7 @@ wait_for_http() {
   local code=""
 
   while (( attempt <= max_tries )); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 10 "$url" || true)"
     if [[ "${code:0:1}" == "2" || "${code:0:1}" == "3" ]]; then
       return 0
     fi
@@ -291,6 +294,14 @@ while [[ $# -gt 0 ]]; do
       start_voice_tts_override="false"
       shift
       ;;
+    --with-tool-server)
+      start_tool_server_override="true"
+      shift
+      ;;
+    --without-tool-server)
+      start_tool_server_override="false"
+      shift
+      ;;
     --with-backend)
       start_backend_override="true"
       shift
@@ -344,6 +355,7 @@ enable_backend="$(_enable_flag ENABLE_BACKEND true start_backend_override)"
 enable_frontend="$(_enable_flag ENABLE_FRONTEND true start_frontend_override)"
 enable_image_server="$(_enable_flag ENABLE_IMAGE_SERVER false start_local_image_server_override)"
 enable_llm_server="$(_enable_flag ENABLE_LLM_SERVER false start_local_llm_server_override)"
+enable_tool_server="$(_enable_flag ENABLE_TOOL_SERVER false start_tool_server_override)"
 
 # Voice: --with-voice-server sets both STT+TTS, individual flags override.
 _voice_stt_default="false"
@@ -377,6 +389,7 @@ echo "  Image server: ${enable_image_server}"
 echo "  LLM server:   ${enable_llm_server}"
 echo "  Voice STT:    ${enable_voice_stt}"
 echo "  Voice TTS:    ${enable_voice_tts}"
+echo "  Tool server:  ${enable_tool_server}"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -949,6 +962,35 @@ if [[ "$enable_voice_tts" == "true" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Tool server (SearXNG + crawl4ai)
+# ---------------------------------------------------------------------------
+
+tool_server_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.tool-server.yml"
+tool_server_url="$(resolve_config_value "TOOL_SERVER_URL")"
+tool_server_url="${tool_server_url:-http://127.0.0.1:4130}"
+tool_server_health_url="${tool_server_url%/}/health"
+
+if [[ "$enable_tool_server" == "true" ]]; then
+  if wait_for_http "$tool_server_health_url" "Tool server" 2; then
+    echo "Tool server already healthy at ${tool_server_url}; leaving it untouched."
+  else
+    echo "Starting tool server (SearXNG + crawl4ai)..."
+    (
+      cd "$LOCAL_MODEL_SERVING_DIR"
+      if [[ -f "$tool_server_compose_file" ]]; then
+        docker compose -f "$tool_server_compose_file" up -d --build
+      else
+        echo "  Warning: Tool server compose file not found: $tool_server_compose_file"
+      fi
+    )
+    echo "  Waiting for tool server to become ready..."
+    if ! wait_for_http "$tool_server_health_url" "Tool server" 120; then
+      echo "  Warning: Tool server did not become ready in time; continuing."
+    fi
+  fi
+fi
+
 if [[ "$enable_backend" == "true" ]]; then
   echo "Starting backend..."
   : >"$BACKEND_LOG"
@@ -988,6 +1030,9 @@ fi
 if [[ "$enable_voice_tts" == "true" ]]; then
   echo "Voice TTS (CB):  ${chatterbox_tts_url}"
   echo "Voice TTS (KK):  ${kokoro_tts_url} (${kokoro_provider})"
+fi
+if [[ "$enable_tool_server" == "true" ]]; then
+  echo "Tool server:     ${tool_server_url}"
 fi
 if [[ "$enable_backend" == "true" ]]; then
   echo "Logs:"
