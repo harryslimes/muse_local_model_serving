@@ -2,26 +2,27 @@
 """Muse Tool Server — lightweight HTTP service for companion tools.
 
 Exposes:
-  POST /tools/crawl   — crawl a URL, return markdown content
+  POST /tools/crawl   — crawl a URL, return clean extracted text
   POST /tools/search  — search the web via SearXNG, return results
   GET  /tools         — list available tools
   GET  /health        — health check
 
-Keeps heavy dependencies (crawl4ai/Playwright) out of the main backend.
+Uses crawl4ai (headless Chromium) for fetching JS-rendered pages,
+then trafilatura for robust article/content extraction.
 """
 
 import os
 
 import httpx
+import trafilatura
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Muse Tool Server")
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080")
-CRAWL_MAX_CHARS = int(os.getenv("CRAWL_MAX_CHARS", "16000"))
+CRAWL_MAX_CHARS = int(os.getenv("CRAWL_MAX_CHARS", "32000"))
 SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
 
 _crawler = None
@@ -48,10 +49,25 @@ async def _get_crawler():
     return _crawler
 
 
+def _extract_with_trafilatura(html: str, url: str) -> str | None:
+    """Extract clean article text from HTML using trafilatura."""
+    return trafilatura.extract(
+        html,
+        url=url,
+        include_comments=False,
+        include_tables=True,
+        include_links=True,
+        include_images=False,
+        favor_recall=True,
+        output_format="txt",
+    )
+
+
 # --- Models ---
 
 class CrawlRequest(BaseModel):
     url: str
+    offset: int = 0  # character offset for pagination
 
 class CrawlResponse(BaseModel):
     success: bool
@@ -98,28 +114,47 @@ async def crawl(req: CrawlRequest):
     if not url:
         return CrawlResponse(success=False, content="", error="No URL provided.")
     try:
-        from crawl4ai import CrawlerRunConfig
-        # Try to extract main content, falling back to full page
-        run_config = CrawlerRunConfig(
-            # Common article/main content selectors
-            css_selector="article, main, [role='main'], .article-body, .post-content, .entry-content",
-            word_count_threshold=20,
-        )
+        # Fetch rendered HTML via headless browser
         crawler = await _get_crawler()
-        result = await crawler.arun(url=url, config=run_config)
-        markdown = result.markdown or ""
-        # If CSS selector matched nothing useful, retry without selector
-        if len(markdown.strip()) < 100:
-            result = await crawler.arun(url=url)
-            markdown = result.markdown or ""
-        if len(markdown) > CRAWL_MAX_CHARS:
-            markdown = markdown[:CRAWL_MAX_CHARS] + "\n\n[Content truncated]"
-        if not markdown.strip():
+        result = await crawler.arun(url=url)
+        raw_html = result.html or ""
+
+        if not raw_html.strip():
+            return CrawlResponse(
+                success=False, content="",
+                error=f"Page at {url} returned no HTML content.",
+            )
+
+        # Extract clean article text with trafilatura
+        text = _extract_with_trafilatura(raw_html, url)
+
+        # Fall back to crawl4ai markdown for non-article pages
+        if not text or len(text.strip()) < 100:
+            text = result.markdown or ""
+
+        if not text.strip():
             return CrawlResponse(
                 success=False, content="",
                 error=f"Page at {url} returned no readable content.",
             )
-        return CrawlResponse(success=True, content=markdown)
+
+        # Pagination
+        total_len = len(text)
+        offset = req.offset
+        if offset >= total_len:
+            return CrawlResponse(
+                success=False, content="",
+                error=f"Offset {offset} is past end of content ({total_len} chars).",
+            )
+        page = text[offset:offset + CRAWL_MAX_CHARS]
+        has_more = (offset + CRAWL_MAX_CHARS) < total_len
+        if has_more:
+            next_offset = offset + CRAWL_MAX_CHARS
+            page += (
+                f"\n\n[Content truncated — showing chars {offset}–{offset + len(page)} "
+                f"of {total_len}. Request offset={next_offset} for next page]"
+            )
+        return CrawlResponse(success=True, content=page)
     except Exception as exc:
         return CrawlResponse(success=False, content="", error=f"Failed to crawl {url}: {exc}")
 

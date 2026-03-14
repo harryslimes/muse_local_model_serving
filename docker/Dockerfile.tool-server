@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir \
     fastapi \
     uvicorn[standard] \
     httpx \
-    crawl4ai
+    crawl4ai \
+    trafilatura
 
 # Install Playwright browsers (needed by crawl4ai)
 RUN crawl4ai-setup
