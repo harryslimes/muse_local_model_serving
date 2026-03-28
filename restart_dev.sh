@@ -240,7 +240,8 @@ cleanup_legacy_local_model_project() {
     "$LOCAL_MODEL_SERVING_DIR/docker-compose.qwen35-35b-a3b.yml" \
     "$LOCAL_MODEL_SERVING_DIR/docker-compose.flux2.yml" \
     "$LOCAL_MODEL_SERVING_DIR/docker-compose.flux2-klein-9b-gguf.yml" \
-    "$LOCAL_MODEL_SERVING_DIR/docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml"
+    "$LOCAL_MODEL_SERVING_DIR/docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml" \
+    "$LOCAL_MODEL_SERVING_DIR/docker-compose.qwen35-35b-a3b-gptq-vllm.yml"
   do
     if [[ -f "$compose_file" ]]; then
       docker compose -p "$legacy_project" -f "$compose_file" down --remove-orphans >/dev/null 2>&1 || true
@@ -612,13 +613,17 @@ if [[ -z "${local_llm_context_size:-}" ]]; then
 fi
 local_llm_chat_model="$(resolve_env_value "$BACKEND_DIR/.env" "LOCAL_CHAT_MODEL")"
 local_llm_chat_model="$(trim_env_value "${local_llm_chat_model:-}")"
-local_llm_server_mode="qwen35"
+local_llm_server_mode="$(resolve_config_value "LOCAL_LLM_SERVER_MODE")"
+local_llm_server_mode="${local_llm_server_mode:-qwen35}"
 local_llm_atlas_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml"
 local_llm_atlas_service_name="atlas-qwen35-35b-a3b-nvfp4"
 local_llm_atlas_downloader_service_name="atlas-qwen35-35b-a3b-nvfp4-downloader"
 local_llm_qwen_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.qwen35-35b-a3b.yml"
 local_llm_qwen_llama_service="qwen35-35b-a3b-llama"
 local_llm_qwen_proxy_service="qwen35-35b-a3b-proxy"
+local_llm_vllm_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.qwen35-35b-a3b-gptq-vllm.yml"
+local_llm_vllm_service_name="qwen35-35b-a3b-gptq-vllm"
+LOCAL_VLLM_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/qwen35_35b_a3b_gptq_vllm_server.sh"
 
 start_local_llm_server="false"
 local_llm_should_check_health="false"
@@ -658,8 +663,15 @@ PY
 
   local local_llm_port
   local_llm_port="$(port_from_url "$local_llm_api_base_url")"
-  if [[ "${local_llm_port:-}" == "18888" ]] || [[ "${local_llm_chat_model,,}" == *"nvfp4"* ]]; then
+  # Only auto-detect mode if not explicitly set via LOCAL_LLM_SERVER_MODE
+  local explicit_mode
+  explicit_mode="$(resolve_config_value "LOCAL_LLM_SERVER_MODE")"
+  if [[ -n "${explicit_mode:-}" ]]; then
+    local_llm_server_mode="${explicit_mode}"
+  elif [[ "${local_llm_port:-}" == "18888" ]] || [[ "${local_llm_chat_model,,}" == *"nvfp4"* ]]; then
     local_llm_server_mode="atlas-nvfp4"
+  elif [[ "${local_llm_chat_model,,}" == *"gptq"* ]]; then
+    local_llm_server_mode="vllm"
   else
     local_llm_server_mode="qwen35"
   fi
@@ -841,6 +853,21 @@ if [[ "$start_local_llm_server" == "true" ]]; then
         export LISTEN_PORT="${local_llm_listen_port}"
       fi
       docker compose -f "$local_llm_atlas_compose_file" up -d "$local_llm_atlas_service_name"
+    )
+  elif [[ "$local_llm_server_mode" == "vllm" ]]; then
+    if [[ ! -x "$LOCAL_VLLM_SERVER_SCRIPT" ]]; then
+      echo "vLLM server script not found or not executable: $LOCAL_VLLM_SERVER_SCRIPT"
+      exit 1
+    fi
+    (
+      cd "$LOCAL_MODEL_SERVING_DIR"
+      cleanup_legacy_local_model_project
+      if [[ -f "$local_llm_qwen_compose_file" ]]; then
+        echo "Stopping Qwen35 llama.cpp services to free GPU memory..."
+        docker compose -f "$local_llm_qwen_compose_file" stop "$local_llm_qwen_proxy_service" "$local_llm_qwen_llama_service" >/dev/null 2>&1 || true
+      fi
+      export VLLM_MAX_MODEL_LEN="${local_llm_context_size}"
+      "$LOCAL_VLLM_SERVER_SCRIPT" restart
     )
   else
     if [[ ! -x "$LOCAL_LLM_SERVER_SCRIPT" ]]; then
