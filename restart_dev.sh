@@ -16,7 +16,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------------------
 PLATFORM="${MUSE_PLATFORM:-nvidia}"
 
-# Args safe to forward to nvidia/restart_dev.sh (backend, frontend, db)
+# Args safe to forward to nvidia/scripts/restart_dev.sh (backend, frontend, db)
 INFRA_ARGS=()
 # Model server intent (only used in mac mode)
 mac_enable_llm=""
@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
       PLATFORM="${1#--platform=}"; shift ;;
 
     # Capture model-server intent — needed for mac routing.
-    # These are NOT forwarded to nvidia/restart_dev.sh in mac mode.
+    # These are NOT forwarded to nvidia/scripts/restart_dev.sh in mac mode.
     --with-local-llm-server)    mac_enable_llm="true";  shift ;;
     --without-local-llm-server) mac_enable_llm="false"; shift ;;
     --with-voice-server)        mac_enable_stt="true"; mac_enable_tts="true";  shift ;;
@@ -67,7 +67,7 @@ Model server flags:
   --with-voice-tts / --without-voice-tts
 
 Other flags are forwarded to the platform script (backend, frontend, db, etc.).
-Run  nvidia/restart_dev.sh --help  for the full flag list.
+Run  nvidia/scripts/restart_dev.sh --help  for the full flag list.
 
 Examples:
   ./restart_dev.sh --platform nvidia --with-local-llm-server --with-voice-server
@@ -95,7 +95,7 @@ if [[ "$PLATFORM" == "nvidia" || "$PLATFORM" == "dgx" ]]; then
   [[ -n "$mac_enable_tts" ]]  && NVIDIA_ARGS+=("--$([ "$mac_enable_tts"  = true ] && echo with || echo without)-voice-tts")
 
   echo "Platform: nvidia"
-  exec "$ROOT_DIR/nvidia/restart_dev.sh" "${NVIDIA_ARGS[@]+"${NVIDIA_ARGS[@]}"}"
+  exec "$ROOT_DIR/nvidia/scripts/restart_dev.sh" "${NVIDIA_ARGS[@]+"${NVIDIA_ARGS[@]}"}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
   fi
 
   # Run backend/frontend via nvidia script, explicitly suppressing all model servers.
-  "$ROOT_DIR/nvidia/restart_dev.sh" \
+  "$ROOT_DIR/nvidia/scripts/restart_dev.sh" \
     --without-local-llm-server \
     --without-local-image-server \
     --without-voice-stt \
