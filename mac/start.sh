@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${SCRIPT_DIR}/../runtime/mac"
 mkdir -p "${LOG_DIR}"
 
+# Activate venv if present
+if [[ -f "${SCRIPT_DIR}/.venv/bin/activate" ]]; then
+  source "${SCRIPT_DIR}/.venv/bin/activate"
+fi
+
 LLM_PORT="${LLM_PORT:-12434}"
 TTS_PORT="${TTS_PORT:-4123}"
 STT_PORT="${STT_PORT:-4124}"
@@ -72,7 +77,8 @@ stop_server() {
 check_health() {
   local name="$1"
   local port="$2"
-  local url="http://127.0.0.1:${port}/health"
+  local path="${3:-/health}"
+  local url="http://127.0.0.1:${port}${path}"
   if curl -fsS "${url}" >/dev/null 2>&1; then
     echo "${name}: ready (${url})"
   else
@@ -91,7 +97,7 @@ cmd_start() {
   for srv in "${servers[@]}"; do
     case "$srv" in
       llm) start_server "llm" "llm_server.py" "${LLM_PORT}" ;;
-      tts) start_server "tts" "tts_server.py" "${TTS_PORT}" ;;
+      tts) start_server "tts" "tts_mlx_server.py" "${TTS_PORT}" ;;
       stt) start_server "stt" "stt_server.py" "${STT_PORT}" ;;
       *)   echo "Unknown server: $srv (use llm, tts, stt)" ;;
     esac

@@ -36,7 +36,7 @@ def _load_model():
     import parakeet_mlx
 
     print(f"Loading Parakeet TDT MLX model: {MODEL_ID}", flush=True)
-    model = parakeet_mlx.load(MODEL_ID)
+    model = parakeet_mlx.from_pretrained(MODEL_ID)
     print("Parakeet TDT MLX loaded successfully", flush=True)
     return model
 
@@ -90,7 +90,7 @@ async def transcribe(request: Request):
         sf.write(tmp.name, audio, _sample_rate)
         result = _model.transcribe(tmp.name)
 
-    text = result if isinstance(result, str) else str(result)
+    text = result.text if hasattr(result, "text") else (result if isinstance(result, str) else str(result))
     return {"text": text.strip(), "duration_seconds": len(audio) / _sample_rate}
 
 

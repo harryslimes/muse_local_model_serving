@@ -42,6 +42,7 @@ def _start_upstream():
         "--model", MODEL_ID,
         "--port", str(UPSTREAM_PORT),
         "--host", "127.0.0.1",
+        "--prompt-cache-size", "3",
     ]
     print(f"Starting mlx_lm.server: {' '.join(cmd)}", flush=True)
     _upstream_proc = subprocess.Popen(cmd)
@@ -88,7 +89,25 @@ async def health():
 async def _proxy(request: Request, path: str):
     body = await request.body()
     upstream_url = f"/{path}"
-    headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+
+    # mlx_lm.server requires at least one user message; inject one if missing.
+    if path == "v1/chat/completions" and body:
+        import json as _json
+        try:
+            payload = _json.loads(body)
+            msgs = payload.get("messages", [])
+            if msgs and not any(m.get("role") == "user" for m in msgs):
+                msgs.append({"role": "user", "content": "go"})
+                payload["messages"] = msgs
+            # Disable thinking mode for Qwen3.5 — produces content immediately.
+            payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+            # Ensure streaming responses include usage stats.
+            if payload.get("stream"):
+                payload.setdefault("stream_options", {})["include_usage"] = True
+            body = _json.dumps(payload).encode()
+        except Exception:
+            pass
 
     rsp = await _client.request(
         method=request.method,

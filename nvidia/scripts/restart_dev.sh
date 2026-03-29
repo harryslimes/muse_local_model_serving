@@ -17,13 +17,13 @@ _read_env_path() {
   fi
   val="${val:-$default}"
   if [[ "$val" != /* ]]; then
-    val="$ROOT_DIR/$val"
+    val="$(dirname "$ENV_FILE")/$val"
   fi
   echo "$val"
 }
 
-BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../../muse_backend)"
-FRONTEND_DIR="$(_read_env_path MUSE_SVELTE_DIR ../../muse_svelte)"
+BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../muse_backend)"
+FRONTEND_DIR="$(_read_env_path MUSE_SVELTE_DIR ../muse_svelte)"
 LOCAL_IMAGE_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/flux2_klein_server.sh"
 LOCAL_LLM_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/qwen35_35b_a3b_server.sh"
 RUN_DIR="$ROOT_DIR/.run"
@@ -760,7 +760,7 @@ fi
 # ---------------------------------------------------------------------------
 # LLM server auto-detection (only when backend is enabled)
 # ---------------------------------------------------------------------------
-if [[ "$enable_backend" == "true" ]]; then
+if [[ "$enable_backend" == "true" ]] && declare -F resolve_effective_local_llm_from_backend &>/dev/null; then
   resolve_effective_local_llm_from_backend
 fi
 if [[ "$enable_llm_server" == "true" ]]; then
@@ -1022,7 +1022,7 @@ fi
 if [[ "$enable_backend" == "true" ]]; then
   echo "Starting backend..."
   : >"$BACKEND_LOG"
-  setsid -f bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload </dev/null >>'$BACKEND_LOG' 2>&1"
+  nohup bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload </dev/null >>'$BACKEND_LOG' 2>&1" >/dev/null 2>&1 &
   wait_for_http "http://127.0.0.1:8000/docs" "Backend" || exit 1
   backend_pid="$(pid_for_listening_port 8000)"
   if [[ -n "${backend_pid:-}" ]]; then
@@ -1033,7 +1033,7 @@ fi
 if [[ "$enable_frontend" == "true" ]]; then
   echo "Starting frontend..."
   : >"$FRONTEND_LOG"
-  setsid -f bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >>'$FRONTEND_LOG' 2>&1"
+  nohup bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >>'$FRONTEND_LOG' 2>&1" >/dev/null 2>&1 &
   wait_for_http "http://127.0.0.1:5173/" "Frontend" || exit 1
   frontend_pid="$(pid_for_listening_port 5173)"
   if [[ -n "${frontend_pid:-}" ]]; then
