@@ -108,7 +108,7 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
   # Resolve model-server enable flags from mac .env (nvidia .env as fallback).
   _read_enable_flag() {
     local key="$1" default="$2"
-    local env_files=("$ROOT_DIR/mac/.env" "$ROOT_DIR/nvidia/.env")
+    local env_files=("$ROOT_DIR/.env" "$ROOT_DIR/mac/.env")
     for f in "${env_files[@]}"; do
       if [[ -f "$f" ]]; then
         local val

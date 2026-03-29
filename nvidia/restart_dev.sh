@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_MODEL_SERVING_DIR="$ROOT_DIR"
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE="${ENV_FILE:-$(cd "$ROOT_DIR/.." && pwd)/.env}"
+export ENV_FILE
 
 # Read MUSE_BACKEND_DIR / MUSE_SVELTE_DIR from .env; resolve relative paths.
 _read_env_path() {
