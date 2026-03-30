@@ -13,6 +13,7 @@ if [[ -f "${SCRIPT_DIR}/.venv/bin/activate" ]]; then
 fi
 
 LLM_PORT="${LLM_PORT:-12434}"
+LLAMA_LLM_PORT="${LLAMA_LLM_PORT:-12436}"
 TTS_PORT="${TTS_PORT:-4123}"
 STT_PORT="${STT_PORT:-4124}"
 
@@ -33,9 +34,10 @@ Commands:
   logs     Tail all logs
 
 Servers:
-  LLM  (Qwen3.5-4B-MLX-4bit)       → http://127.0.0.1:12434
-  TTS  (chatterbox-turbo-8bit)      → http://127.0.0.1:4123
-  STT  (parakeet-tdt-0.6b-v3)      → http://127.0.0.1:4124
+  llama  (llama.cpp Qwen3.5-4B GGUF) → http://127.0.0.1:12436  (set MODEL_PATH)
+  llm    (Qwen3.5-4B-MLX-4bit)       → http://127.0.0.1:12434
+  tts    (chatterbox-turbo-8bit)      → http://127.0.0.1:4123
+  stt    (parakeet-tdt-0.6b-v3)      → http://127.0.0.1:4124
 EOF
 }
 
@@ -53,6 +55,28 @@ start_server() {
 
   echo "Starting ${name} on port ${port}..."
   LISTEN_PORT="${port}" python "${SCRIPT_DIR}/${script}" >"${log}" 2>&1 &
+  echo $! >"${pid_file}"
+  echo "${name}: started (pid $!, log: ${log})"
+}
+
+start_llama_server() {
+  local name="llama"
+  local port="${LLAMA_LLM_PORT}"
+  local log="${LOG_DIR}/${name}.log"
+  local pid_file="${LOG_DIR}/${name}.pid"
+
+  if [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
+    echo "${name}: already running (pid $(cat "${pid_file}"))"
+    return
+  fi
+
+  if [[ -z "${MODEL_PATH:-}" ]]; then
+    echo "${name}: MODEL_PATH is not set — skipping (set MODEL_PATH to a GGUF file path)"
+    return 1
+  fi
+
+  echo "Starting ${name} on port ${port}..."
+  LLAMA_PORT="${port}" sh "${SCRIPT_DIR}/llama_entrypoint.sh" >"${log}" 2>&1 &
   echo $! >"${pid_file}"
   echo "${name}: started (pid $!, log: ${log})"
 }
@@ -96,10 +120,11 @@ cmd_start() {
 
   for srv in "${servers[@]}"; do
     case "$srv" in
-      llm) start_server "llm" "llm_server.py" "${LLM_PORT}" ;;
-      tts) start_server "tts" "tts_mlx_server.py" "${TTS_PORT}" ;;
-      stt) start_server "stt" "stt_server.py" "${STT_PORT}" ;;
-      *)   echo "Unknown server: $srv (use llm, tts, stt)" ;;
+      llama) start_llama_server ;;
+      llm)   start_server "llm" "llm_server.py" "${LLM_PORT}" ;;
+      tts)   start_server "tts" "tts_mlx_server.py" "${TTS_PORT}" ;;
+      stt)   start_server "stt" "stt_server.py" "${STT_PORT}" ;;
+      *)     echo "Unknown server: $srv (use llama, llm, tts, stt)" ;;
     esac
   done
   echo ""
@@ -107,19 +132,21 @@ cmd_start() {
 }
 
 cmd_stop() {
+  stop_server "llama"
   stop_server "llm"
   stop_server "tts"
   stop_server "stt"
 }
 
 cmd_status() {
-  check_health "LLM (Qwen3.5-4B)" "${LLM_PORT}"
-  check_health "TTS (Chatterbox)"  "${TTS_PORT}"
-  check_health "STT (Parakeet)"    "${STT_PORT}"
+  check_health "LLM llama.cpp (Qwen3.5-4B)" "${LLAMA_LLM_PORT}"
+  check_health "LLM MLX      (Qwen3.5-4B)"  "${LLM_PORT}"
+  check_health "TTS          (Chatterbox)"   "${TTS_PORT}"
+  check_health "STT          (Parakeet)"     "${STT_PORT}"
 }
 
 cmd_logs() {
-  tail -f "${LOG_DIR}/llm.log" "${LOG_DIR}/tts.log" "${LOG_DIR}/stt.log" 2>/dev/null
+  tail -f "${LOG_DIR}/llama.log" "${LOG_DIR}/llm.log" "${LOG_DIR}/tts.log" "${LOG_DIR}/stt.log" 2>/dev/null
 }
 
 main() {

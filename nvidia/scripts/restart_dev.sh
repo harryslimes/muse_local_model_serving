@@ -24,6 +24,8 @@ _read_env_path() {
 
 BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../muse_backend)"
 FRONTEND_DIR="$(_read_env_path MUSE_SVELTE_DIR ../muse_svelte)"
+BACKEND_PORT="${MUSE_BACKEND_PORT:-8000}"
+FRONTEND_PORT="${MUSE_FRONTEND_PORT:-5173}"
 LOCAL_IMAGE_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/flux2_klein_server.sh"
 LOCAL_LLM_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/qwen35_35b_a3b_server.sh"
 RUN_DIR="$ROOT_DIR/.run"
@@ -707,11 +709,11 @@ fi  # end image/LLM config block
 if [[ "$enable_backend" == "true" ]]; then
   echo "Stopping old dev servers..."
   kill_from_pid_file "$BACKEND_PID_FILE" "backend"
-  kill_listeners_on_port 8000 "backend"
+  kill_listeners_on_port "$BACKEND_PORT" "backend"
 fi
 if [[ "$enable_frontend" == "true" ]]; then
   kill_from_pid_file "$FRONTEND_PID_FILE" "frontend"
-  kill_listeners_on_port 5173 "frontend"
+  kill_listeners_on_port "$FRONTEND_PORT" "frontend"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1022,9 +1024,9 @@ fi
 if [[ "$enable_backend" == "true" ]]; then
   echo "Starting backend..."
   : >"$BACKEND_LOG"
-  nohup bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload </dev/null >>'$BACKEND_LOG' 2>&1" >/dev/null 2>&1 &
-  wait_for_http "http://127.0.0.1:8000/docs" "Backend" || exit 1
-  backend_pid="$(pid_for_listening_port 8000)"
+  nohup bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 127.0.0.1 --port $BACKEND_PORT --reload </dev/null >>'$BACKEND_LOG' 2>&1" >/dev/null 2>&1 &
+  wait_for_http "http://127.0.0.1:$BACKEND_PORT/docs" "Backend" || exit 1
+  backend_pid="$(pid_for_listening_port $BACKEND_PORT)"
   if [[ -n "${backend_pid:-}" ]]; then
     echo "$backend_pid" >"$BACKEND_PID_FILE"
   fi
@@ -1033,9 +1035,9 @@ fi
 if [[ "$enable_frontend" == "true" ]]; then
   echo "Starting frontend..."
   : >"$FRONTEND_LOG"
-  nohup bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 0.0.0.0 --port 5173 </dev/null >>'$FRONTEND_LOG' 2>&1" >/dev/null 2>&1 &
-  wait_for_http "http://127.0.0.1:5173/" "Frontend" || exit 1
-  frontend_pid="$(pid_for_listening_port 5173)"
+  nohup bash -lc "cd '$FRONTEND_DIR' && exec npm run dev -- --host 127.0.0.1 --port $FRONTEND_PORT </dev/null >>'$FRONTEND_LOG' 2>&1" >/dev/null 2>&1 &
+  wait_for_http "http://127.0.0.1:$FRONTEND_PORT/" "Frontend" || exit 1
+  frontend_pid="$(pid_for_listening_port $FRONTEND_PORT)"
   if [[ -n "${frontend_pid:-}" ]]; then
     echo "$frontend_pid" >"$FRONTEND_PID_FILE"
   fi
@@ -1044,10 +1046,10 @@ fi
 echo ""
 echo "Restart complete."
 if [[ "$enable_backend" == "true" ]]; then
-  echo "Backend:  http://127.0.0.1:8000/docs"
+  echo "Backend:  http://127.0.0.1:$BACKEND_PORT/docs"
 fi
 if [[ "$enable_frontend" == "true" ]]; then
-  echo "Frontend: http://127.0.0.1:5173/"
+  echo "Frontend: http://127.0.0.1:$FRONTEND_PORT/"
 fi
 if [[ "$start_local_image_server" == "true" ]]; then
   echo "Image server: ${local_image_server_models_url}"
