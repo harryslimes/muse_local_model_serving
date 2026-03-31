@@ -1,10 +1,10 @@
 {
   "default": {
-    "file": "her_prompt.wav",
+    "file": "clips/her_prompt.wav",
     "description": "Default voice (place a 10+ second WAV clip here)"
   },
   "charlotte": {
-  "file": "charlotte-gainsbourg.wav",
-  "description": "Charlotte Gainsbourg"
+    "file": "clips/charlotte-gainsbourg.wav",
+    "description": "Charlotte Gainsbourg"
   }
 }

@@ -4,6 +4,10 @@
 Uses mlx_audio directly (no subprocess proxy) and loads voice conditionals
 from .safetensors files for accurate voice cloning.
 
+On startup, scans voices/clips/ for audio files that lack a corresponding
+.safetensors file and extracts conditionals using the fp16 model so the
+quantised serving model gets high-quality voice embeddings.
+
 Exposes:
   POST /v1/audio/speech  — OpenAI-compatible TTS endpoint (returns WAV)
   GET  /health           — health check
@@ -24,30 +28,80 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 MODEL_ID = os.getenv("CHATTERBOX_MLX_MODEL", "mlx-community/chatterbox-turbo-8bit")
+EXTRACT_MODEL_ID = os.getenv(
+    "CHATTERBOX_MLX_EXTRACT_MODEL", "mlx-community/chatterbox-turbo-fp16"
+)
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "4123"))
 VOICES_DIR = Path(os.getenv("VOICES_DIR", Path(__file__).parent.parent / "voices"))
+CLIPS_DIR = VOICES_DIR / "clips"
+
+AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".ogg")
 
 app = FastAPI(title="Chatterbox MLX TTS Server")
 _model = None
 _model_lock = threading.Lock()
 
 
-def _load_model():
+def _load_model(model_id: str = MODEL_ID):
     from mlx_audio.tts.utils import load_model
-    print(f"Loading TTS model: {MODEL_ID}", flush=True)
-    model = load_model(MODEL_ID)
-    print("TTS model loaded", flush=True)
+    print(f"Loading TTS model: {model_id}", flush=True)
+    model = load_model(model_id)
+    print(f"TTS model loaded: {model_id}", flush=True)
     return model
 
 
+def _extract_missing_safetensors():
+    """Find clips without .safetensors and extract conditionals using the fp16 model."""
+    if not CLIPS_DIR.is_dir():
+        return
+
+    missing = []
+    for f in sorted(CLIPS_DIR.iterdir()):
+        if f.suffix in AUDIO_EXTENSIONS:
+            st_path = VOICES_DIR / f"{f.stem}.safetensors"
+            if not st_path.is_file():
+                missing.append(f)
+
+    if not missing:
+        return
+
+    print(
+        f"Found {len(missing)} clip(s) without safetensors: "
+        f"{[f.name for f in missing]}",
+        flush=True,
+    )
+    print(f"Loading fp16 model for extraction: {EXTRACT_MODEL_ID}", flush=True)
+    extract_model = _load_model(EXTRACT_MODEL_ID)
+
+    for clip_path in missing:
+        st_path = VOICES_DIR / f"{clip_path.stem}.safetensors"
+        print(f"  Extracting conditionals: {clip_path.name} -> {st_path.name}", flush=True)
+        extract_model.prepare_conditionals(str(clip_path))
+        conds = extract_model._conds
+
+        arrays = {}
+        for attr in ("cond_prompt_speech_tokens", "speaker_emb"):
+            val = getattr(conds.t3, attr, None)
+            if val is not None:
+                arrays[f"t3_{attr}"] = val
+        for key, val in conds.gen.items():
+            arrays[f"gen_{key}"] = val
+
+        mx.save_safetensors(str(st_path), arrays)
+        print(f"  Saved {st_path.name}", flush=True)
+
+    # Free the fp16 model
+    del extract_model
+    print("Extraction complete, fp16 model unloaded", flush=True)
+
+
 def _load_voice_conditionals(voice_name: str):
-    """Load pre-computed voice conditionals from .safetensors, or extract from .wav."""
+    """Load pre-computed voice conditionals from .safetensors."""
     from mlx_audio.tts.models.chatterbox_turbo.chatterbox_turbo import (
         Conditionals,
         T3Cond,
     )
 
-    # Prefer safetensors (pre-computed embeddings).
     st_path = VOICES_DIR / f"{voice_name}.safetensors"
     if st_path.is_file():
         arrays = mx.load(str(st_path))
@@ -60,10 +114,15 @@ def _load_voice_conditionals(voice_name: str):
                 gen[k[4:]] = v
         return Conditionals(t3=T3Cond(**t3_kwargs), gen=gen)
 
-    # Fall back to extracting from wav at runtime.
-    for ext in (".wav", ".mp3", ".flac", ".ogg"):
-        wav_path = VOICES_DIR / f"{voice_name}{ext}"
+    # Fall back to extracting from clip at runtime (lower quality with quantised model).
+    for ext in AUDIO_EXTENSIONS:
+        wav_path = CLIPS_DIR / f"{voice_name}{ext}"
         if wav_path.is_file():
+            print(
+                f"Warning: no safetensors for '{voice_name}', "
+                f"falling back to runtime extraction (lower quality)",
+                flush=True,
+            )
             _model.prepare_conditionals(str(wav_path))
             return _model._conds
 
@@ -98,6 +157,7 @@ def _make_wav(pcm_float: np.ndarray, sample_rate: int = 24000) -> bytes:
 @app.on_event("startup")
 async def startup():
     global _model
+    _extract_missing_safetensors()
     _model = _load_model()
 
 
@@ -110,11 +170,12 @@ async def health():
 
 @app.get("/voices")
 async def list_voices():
+    """List available voices (one entry per safetensors file)."""
     voices = []
     if VOICES_DIR.is_dir():
         for f in sorted(VOICES_DIR.iterdir()):
-            if f.suffix in (".wav", ".mp3", ".flac", ".ogg", ".safetensors"):
-                voices.append({"id": f.stem, "file": f.name})
+            if f.suffix == ".safetensors":
+                voices.append({"id": f.stem, "description": f.stem})
     return {"voices": voices}
 
 
