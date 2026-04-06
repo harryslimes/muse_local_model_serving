@@ -29,7 +29,7 @@ Usage: ./start.sh [command]
 
 Commands:
   start    Start all servers (default)
-  stop     Stop all running servers
+  stop     Stop all running servers, or the named servers
   status   Show server health
   logs     Tail all logs
 
@@ -98,6 +98,20 @@ stop_server() {
   fi
 }
 
+cmd_stop() {
+  local servers=("$@")
+  if [[ ${#servers[@]} -eq 0 ]]; then
+    servers=(llama llm tts stt)
+  fi
+
+  for srv in "${servers[@]}"; do
+    case "$srv" in
+      llama|llm|tts|stt) stop_server "$srv" ;;
+      *) echo "Unknown server: $srv (use llama, llm, tts, stt)" ;;
+    esac
+  done
+}
+
 check_health() {
   local name="$1"
   local port="$2"
@@ -131,13 +145,6 @@ cmd_start() {
   echo "Note: models load in the background. Run './start.sh status' to check readiness."
 }
 
-cmd_stop() {
-  stop_server "llama"
-  stop_server "llm"
-  stop_server "tts"
-  stop_server "stt"
-}
-
 cmd_status() {
   check_health "LLM llama.cpp (Qwen3.5-4B)" "${LLAMA_LLM_PORT}"
   check_health "LLM MLX      (Qwen3.5-4B)"  "${LLM_PORT}"
@@ -153,7 +160,7 @@ main() {
   local command="${1:-start}"
   case "${command}" in
     start)   shift; cmd_start "$@" ;;
-    stop)    cmd_stop ;;
+    stop)    shift; cmd_stop "$@" ;;
     restart) shift; cmd_stop; cmd_start "$@" ;;
     status)  cmd_status ;;
     logs)    cmd_logs ;;

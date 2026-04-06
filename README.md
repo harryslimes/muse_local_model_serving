@@ -8,6 +8,29 @@ Layout:
 - `scripts/` server lifecycle wrappers
 - `runtime/` logs and transient runtime state
 
+## Dev Restart Without Docker Postgres
+
+If `muse_backend/.env` points at a local Postgres instance, you can skip Docker for the database when using the shared restart script:
+- `./restart_dev.sh --platform mac --db-mode local`
+- `./restart_dev.sh --platform mac --db-mode local --local-llm-server-mode mlx`
+- `./restart_dev.sh --platform mac --db-mode local --local-llm-server-mode llama.cpp`
+
+You can also make that the default:
+- `MUSE_DB_MODE=local ./restart_dev.sh --platform mac`
+
+`--db-mode auto` tries the `DATABASE_URL` host first and falls back to Docker only when that database is not reachable.
+
+On mac, `muse_local_model_serving/.env` now controls which local LLM backend is started:
+- `LOCAL_LLM_SERVER_MODE=mlx` uses the MLX server on `127.0.0.1:12434`
+- `LOCAL_LLM_SERVER_MODE=llama.cpp` uses the GGUF server on `127.0.0.1:12436`
+
+If `ENABLE_LLM_SERVER=true` and `LOCAL_LLM_SERVER_MODE` is missing, `restart_dev.sh` exits with an error instead of guessing.
+
+When using `LOCAL_LLM_SERVER_MODE=llama.cpp`, you must also set:
+- `LOCAL_LLAMA_MODEL_PATH=/absolute/path/to/model.gguf`
+
+The backend now advertises local models from the server that is actually running, so the app’s provider/model picker only shows local models that are live and reachable.
+
 ## FLUX.2 Klein (Docker)
 
 `scripts/flux2_klein_server.sh` defaults to Docker mode (`DOCKER_MODE=true`), and will:

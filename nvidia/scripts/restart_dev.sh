@@ -60,6 +60,8 @@ start_voice_tts_override=""
 start_backend_override=""
 start_frontend_override=""
 start_tool_server_override=""
+db_mode_override=""
+local_llm_server_mode_override=""
 
 print_usage() {
   cat <<'EOF'
@@ -77,6 +79,8 @@ Which services start is controlled by ENABLE_* flags in .env:
 
 CLI flags override .env settings:
   --reset-db                    Reset backend DB (prompts for CONFIRM).
+  --db-mode docker|local|auto   Choose Postgres source. Default: docker
+  --local-llm-server-mode MODE  Override local LLM server mode (for example qwen35, vllm)
   --with-backend / --without-backend
   --with-frontend / --without-frontend
   --with-local-image-server / --without-local-image-server
@@ -148,6 +152,172 @@ port_from_url() {
     return
   fi
   echo ""
+}
+
+parse_database_url() {
+  local url="${1:-}"
+  python3 - "$url" <<'PY'
+import sys
+from urllib.parse import unquote, urlsplit
+
+url = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not url or "://" not in url:
+    raise SystemExit(1)
+
+scheme, rest = url.split("://", 1)
+base_scheme = scheme.split("+", 1)[0]
+parsed = urlsplit(f"{base_scheme}://{rest}")
+
+print(parsed.hostname or "")
+print(parsed.port or 5432)
+print(unquote(parsed.username or ""))
+print(unquote(parsed.password or ""))
+print(unquote(parsed.path.lstrip("/")))
+PY
+}
+
+database_url=""
+db_host=""
+db_port=""
+db_user=""
+db_password=""
+db_name=""
+effective_db_mode=""
+
+load_database_config() {
+  database_url="$(resolve_config_value "DATABASE_URL")"
+  if [[ -z "${database_url:-}" ]]; then
+    database_url="postgresql+asyncpg://postgres:postgres@localhost:5433/muse"
+  fi
+
+  local parsed
+  parsed="$(parse_database_url "$database_url" 2>/dev/null || true)"
+  if [[ -z "${parsed:-}" ]]; then
+    echo "Could not parse DATABASE_URL: ${database_url}"
+    exit 1
+  fi
+
+  db_host="$(echo "$parsed" | sed -n '1p')"
+  db_port="$(echo "$parsed" | sed -n '2p')"
+  db_user="$(echo "$parsed" | sed -n '3p')"
+  db_password="$(echo "$parsed" | sed -n '4p')"
+  db_name="$(echo "$parsed" | sed -n '5p')"
+
+  db_host="${db_host:-localhost}"
+  db_port="${db_port:-5432}"
+  db_user="${db_user:-postgres}"
+  db_name="${db_name:-muse}"
+}
+
+wait_for_local_db_health() {
+  local max_tries="${1:-60}"
+  local attempt=1
+
+  while (( attempt <= max_tries )); do
+    if command -v pg_isready >/dev/null 2>&1; then
+      PGPASSWORD="${db_password:-}" \
+        pg_isready -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" >/dev/null 2>&1 && return 0
+    elif command -v psql >/dev/null 2>&1; then
+      PGPASSWORD="${db_password:-}" \
+        psql \
+          --host="$db_host" \
+          --port="$db_port" \
+          --username="$db_user" \
+          --dbname="$db_name" \
+          --no-password \
+          --command='SELECT 1;' >/dev/null 2>&1 && return 0
+    elif python3 - "$db_host" "$db_port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+with socket.create_connection((host, port), timeout=1):
+    pass
+PY
+    then
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  echo "Local Postgres did not become ready at ${db_host}:${db_port} in time."
+  return 1
+}
+
+local_db_is_reachable() {
+  if command -v pg_isready >/dev/null 2>&1; then
+    PGPASSWORD="${db_password:-}" \
+      pg_isready -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v psql >/dev/null 2>&1; then
+    PGPASSWORD="${db_password:-}" \
+      psql \
+        --host="$db_host" \
+        --port="$db_port" \
+        --username="$db_user" \
+        --dbname="$db_name" \
+        --no-password \
+        --command='SELECT 1;' >/dev/null 2>&1
+    return $?
+  fi
+
+  python3 - "$db_host" "$db_port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+with socket.create_connection((host, port), timeout=1):
+    pass
+PY
+}
+
+resolve_db_mode() {
+  local configured
+  configured="${db_mode_override:-${MUSE_DB_MODE:-docker}}"
+  configured="$(echo "$configured" | tr '[:upper:]' '[:lower:]')"
+
+  case "$configured" in
+    docker)
+      effective_db_mode="docker"
+      ;;
+    local)
+      effective_db_mode="local"
+      ;;
+    auto)
+      if local_db_is_reachable; then
+        effective_db_mode="local"
+      else
+        effective_db_mode="docker"
+      fi
+      ;;
+    *)
+      echo "Invalid --db-mode value: ${configured} (expected docker, local, or auto)"
+      exit 1
+      ;;
+  esac
+}
+
+start_postgres_if_needed() {
+  if [[ "$effective_db_mode" == "docker" ]]; then
+    echo "Starting Postgres with docker compose..."
+    (
+      cd "$BACKEND_DIR"
+      docker compose up -d db
+    )
+    wait_for_db_health
+    return
+  fi
+
+  echo "Using local Postgres at ${db_host}:${db_port}/${db_name}"
+  if ! wait_for_local_db_health; then
+    echo "Start a local Postgres instance or re-run with --db-mode docker."
+    exit 1
+  fi
 }
 
 is_local_host_url() {
@@ -334,6 +504,22 @@ while [[ $# -gt 0 ]]; do
       start_frontend_override="false"
       shift
       ;;
+    --local-llm-server-mode)
+      local_llm_server_mode_override="$2"
+      shift 2
+      ;;
+    --local-llm-server-mode=*)
+      local_llm_server_mode_override="${1#--local-llm-server-mode=}"
+      shift
+      ;;
+    --db-mode)
+      db_mode_override="$2"
+      shift 2
+      ;;
+    --db-mode=*)
+      db_mode_override="${1#--db-mode=}"
+      shift
+      ;;
     -h|--help)
       print_usage
       exit 0
@@ -406,7 +592,6 @@ echo "  LLM server:   ${enable_llm_server}"
 echo "  Voice STT:    ${enable_voice_stt}"
 echo "  Voice TTS:    ${enable_voice_tts}"
 echo "  Tool server:  ${enable_tool_server}"
-echo ""
 
 # ---------------------------------------------------------------------------
 # Helper: read config value from local .env first, then backend .env fallback.
@@ -429,6 +614,12 @@ resolve_config_value() {
   echo "${val:-}"
 }
 
+load_database_config
+resolve_db_mode
+
+echo "  DB mode:      ${effective_db_mode} (${db_host}:${db_port}/${db_name})"
+echo ""
+
 if [[ "$reset_db" == "true" ]] && [[ "$enable_backend" != "true" ]]; then
   echo "Warning: --reset-db ignored because backend is disabled."
   reset_db="false"
@@ -447,16 +638,12 @@ if [[ "$reset_db" == "true" ]]; then
   fi
 
   echo "Starting Postgres for DB reset..."
-  (
-    cd "$BACKEND_DIR"
-    docker compose up -d db
-  )
-  wait_for_db_health
+  start_postgres_if_needed
 
   echo "Resetting backend database..."
   (
     cd "$BACKEND_DIR"
-    ./reset_db.sh <<< "CONFIRM"
+    MUSE_DB_MODE="$effective_db_mode" ./reset_db.sh <<< "CONFIRM"
   )
 fi
 
@@ -628,7 +815,11 @@ if [[ -z "${local_llm_context_size:-}" ]]; then
 fi
 local_llm_chat_model="$(resolve_env_value "$BACKEND_DIR/.env" "LOCAL_CHAT_MODEL")"
 local_llm_chat_model="$(trim_env_value "${local_llm_chat_model:-}")"
-local_llm_server_mode="$(resolve_config_value "LOCAL_LLM_SERVER_MODE")"
+if [[ -n "${local_llm_server_mode_override:-}" ]]; then
+  local_llm_server_mode="$local_llm_server_mode_override"
+else
+  local_llm_server_mode="$(resolve_config_value "LOCAL_LLM_SERVER_MODE")"
+fi
 local_llm_server_mode="${local_llm_server_mode:-qwen35}"
 local_llm_qwen_compose_file="$LOCAL_MODEL_SERVING_DIR/docker-compose.qwen35-35b-a3b.yml"
 local_llm_qwen_llama_service="qwen35-35b-a3b-llama"
@@ -677,7 +868,7 @@ PY
   local_llm_port="$(port_from_url "$local_llm_api_base_url")"
   # Only auto-detect mode if not explicitly set via LOCAL_LLM_SERVER_MODE
   local explicit_mode
-  explicit_mode="$(resolve_config_value "LOCAL_LLM_SERVER_MODE")"
+  explicit_mode="${local_llm_server_mode_override:-$(resolve_config_value "LOCAL_LLM_SERVER_MODE")}"
   if [[ -n "${explicit_mode:-}" ]]; then
     local_llm_server_mode="${explicit_mode}"
   elif [[ "${local_llm_chat_model,,}" == *"gptq"* ]]; then
@@ -727,12 +918,7 @@ fi
 # Backend: Postgres, venv, migrations
 # ---------------------------------------------------------------------------
 if [[ "$enable_backend" == "true" ]]; then
-  echo "Starting Postgres..."
-  (
-    cd "$BACKEND_DIR"
-    docker compose up -d db
-  )
-  wait_for_db_health
+  start_postgres_if_needed
 
   if [[ ! -d "$BACKEND_DIR/.venv" ]]; then
     echo "Creating backend virtualenv with uv sync..."
@@ -1010,8 +1196,25 @@ fi
 
 if [[ "$enable_backend" == "true" ]]; then
   echo "Starting backend..."
+  backend_reload_args=()
+  backend_env_prefix=()
+  if is_truthy "${MUSE_BACKEND_RELOAD:-true}"; then
+    backend_reload_args+=(--reload)
+  fi
+  for env_name in \
+    LOCAL_LLM_API_BASE_URL \
+    LOCAL_CHAT_MODEL \
+    LOCAL_SUMMARIZATION_MODEL \
+    LOCAL_LLM_PROFILE \
+    LLM_OVERRIDE_PROVIDER \
+    LLM_OVERRIDE_MODEL
+  do
+    if [[ -n "${!env_name:-}" ]]; then
+      backend_env_prefix+=("${env_name}='${!env_name}'")
+    fi
+  done
   : >"$BACKEND_LOG"
-  nohup bash -lc "cd '$BACKEND_DIR' && exec uv run uvicorn app.main:app --host 127.0.0.1 --port $BACKEND_PORT --reload </dev/null >>'$BACKEND_LOG' 2>&1" >/dev/null 2>&1 &
+  nohup bash -lc "cd '$BACKEND_DIR' && ${backend_env_prefix[*]:-} exec uv run uvicorn app.main:app --host 127.0.0.1 --port $BACKEND_PORT ${backend_reload_args[*]:-} </dev/null >>'$BACKEND_LOG' 2>&1" >/dev/null 2>&1 &
   wait_for_http "http://127.0.0.1:$BACKEND_PORT/docs" "Backend" || exit 1
   backend_pid="$(pid_for_listening_port $BACKEND_PORT)"
   if [[ -n "${backend_pid:-}" ]]; then
