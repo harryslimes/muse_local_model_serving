@@ -1,0 +1,38 @@
+services:
+  qwen35-35b-a3b-gptq-vllm:
+    image: ${VLLM_IMAGE:-dgx-vllm:latest}
+    gpus: all
+    ipc: host
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    command:
+      - ${VLLM_MODEL:-Qwen/Qwen3.5-35B-A3B-GPTQ-Int4}
+      - --served-model-name
+      - ${VLLM_SERVED_MODEL_NAME:-Qwen3.5-35B-A3B}
+      - --port
+      - "${VLLM_PORT:-8000}"
+      - --max-model-len
+      - "${VLLM_MAX_MODEL_LEN:-32768}"
+      - --quantization
+      - gptq_marlin
+      - --dtype
+      - float16
+      - --trust-remote-code
+      - --enable-prefix-caching
+      - --enable-prompt-tokens-details
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEM_UTIL:-0.80}"
+    ports:
+      - "${LISTEN_IP:-127.0.0.1}:${LISTEN_PORT:-12434}:${VLLM_PORT:-8000}"
+    volumes:
+      - ${HF_CACHE_HOST:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${MODEL_ROOT_HOST:-./models}:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${VLLM_PORT:-8000}/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 60
+      start_period: 120s

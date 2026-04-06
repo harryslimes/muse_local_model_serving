@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_MODEL_SERVING_DIR="$ROOT_DIR"
-ENV_FILE="$ROOT_DIR/.env"
+LOCAL_MODEL_SERVING_DIR="$ROOT_DIR/.."
+ENV_FILE="${ENV_FILE:-$(cd "$ROOT_DIR/../.." && pwd)/.env}"
 
 # Read MUSE_BACKEND_DIR from .env; resolve relative paths.
 _read_env_path() {
@@ -21,7 +21,7 @@ _read_env_path() {
   echo "$val"
 }
 
-BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../muse_backend)"
+BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../../muse_backend)"
 BACKEND_ENV_FILE="${BACKEND_DIR}/.env"
 LLM_SERVER_SCRIPT="${LOCAL_MODEL_SERVING_DIR}/scripts/qwen35_35b_a3b_server.sh"
 IMAGE_SERVER_SCRIPT="${LOCAL_MODEL_SERVING_DIR}/scripts/flux2_klein_server.sh"

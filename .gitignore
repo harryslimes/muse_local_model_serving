@@ -1,4 +1,6 @@
 .env
+.DS_Store
+nohup.out
 models/
 .run/
 runtime/

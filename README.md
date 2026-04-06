@@ -90,32 +90,6 @@ Container config files:
 - `docker/qwen35_llama_entrypoint.sh`
 - `docker/chat-templates/qwen3_openclaw.jinja`
 
-## Atlas Qwen3.5-35B-A3B-NVFP4 (Docker)
-
-Compose stack for the Atlas image + NVFP4 model mentioned in the LocalLLaMA thread:
-- Image: `avarok/atlas-qwen3.5-35b-a3b-alpha:latest`
-- Model: `Kbenkhaled/Qwen3.5-35B-A3B-NVFP4`
-- Flags: `--speculative --kv-cache-dtype nvfp4 --mtp-quantization nvfp4 --scheduling-policy slai --max-seq-len 131072`
-
-Compose workflow:
-- `docker compose -f docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml pull atlas-qwen35-35b-a3b-nvfp4`
-- Optional prefetch (downloads model artifacts into HF cache volume):
-  `docker compose -f docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml --profile tools run --rm atlas-qwen35-35b-a3b-nvfp4-downloader`
-- `docker compose -f docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml up -d atlas-qwen35-35b-a3b-nvfp4`
-
-Verify:
-- `curl http://127.0.0.1:18888/v1/models`
-
-Environment overrides:
-- `ATLAS_IMAGE` (default: `avarok/atlas-qwen3.5-35b-a3b-alpha:latest`)
-- `ATLAS_MODEL_REPO` (default: `Kbenkhaled/Qwen3.5-35B-A3B-NVFP4`)
-- `LISTEN_IP`, `LISTEN_PORT` (default host bind `127.0.0.1:18888`)
-- `HF_CACHE_HOST` (default: `./runtime/atlas_qwen35_35b_a3b_nvfp4_server/hf-cache`)
-- `ATLAS_MAX_SEQ_LEN`, `ATLAS_KV_CACHE_DTYPE`, `ATLAS_MTP_QUANTIZATION`, `ATLAS_SCHEDULING_POLICY`
-
-Container config file:
-- `docker-compose.atlas-qwen35-35b-a3b-nvfp4.yml`
-
 ## Tool Server (Docker — SearXNG + crawl4ai)
 
 Compose stack providing web search and web crawl endpoints for companion tool calling:
