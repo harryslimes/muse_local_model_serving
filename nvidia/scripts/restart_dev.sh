@@ -6,16 +6,29 @@ LOCAL_MODEL_SERVING_DIR="$ROOT_DIR/.."
 ENV_FILE="${ENV_FILE:-$(cd "$ROOT_DIR/../.." && pwd)/.env}"
 export ENV_FILE
 
-# Read MUSE_BACKEND_DIR / MUSE_SVELTE_DIR from .env; resolve relative paths.
-_read_env_path() {
+# Read a value from .env files (LOCAL_MODEL_SERVING_DIR/.env, then project root .env).
+_LOCAL_ENV_FILE="$ROOT_DIR/../.."/.env
+
+_read_env_val() {
   local key="$1" default="$2"
   local val=""
-  if [[ -f "$ENV_FILE" ]]; then
-    val="$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d'=' -f2- || true)"
-    val="$(echo "$val" | sed 's/^ *//;s/ *$//')"
-    val="${val%\"}" ; val="${val#\"}" ; val="${val%\'}" ; val="${val#\'}"
-  fi
-  val="${val:-$default}"
+  # Check local .env first, then project root .env
+  for f in "$_LOCAL_ENV_FILE" "$ENV_FILE"; do
+    if [[ -f "$f" ]]; then
+      val="$(grep -E "^${key}=" "$f" | tail -n 1 | cut -d'=' -f2- || true)"
+      val="$(echo "$val" | sed 's/^ *//;s/ *$//')"
+      val="${val%\"}" ; val="${val#\"}" ; val="${val%\'}" ; val="${val#\'}"
+      if [[ -n "$val" ]]; then
+        echo "$val"; return
+      fi
+    fi
+  done
+  echo "$default"
+}
+
+_read_env_path() {
+  local val
+  val="$(_read_env_val "$1" "$2")"
   if [[ "$val" != /* ]]; then
     val="$(dirname "$ENV_FILE")/$val"
   fi
@@ -24,8 +37,8 @@ _read_env_path() {
 
 BACKEND_DIR="$(_read_env_path MUSE_BACKEND_DIR ../muse_backend)"
 FRONTEND_DIR="$(_read_env_path MUSE_SVELTE_DIR ../muse_svelte)"
-BACKEND_PORT="${MUSE_BACKEND_PORT:-8000}"
-FRONTEND_PORT="${MUSE_FRONTEND_PORT:-5173}"
+BACKEND_PORT="$(_read_env_val MUSE_BACKEND_PORT 8000)"
+FRONTEND_PORT="$(_read_env_val MUSE_FRONTEND_PORT 5173)"
 LOCAL_IMAGE_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/flux2_klein_server.sh"
 LOCAL_LLM_SERVER_SCRIPT="$LOCAL_MODEL_SERVING_DIR/scripts/qwen35_35b_a3b_server.sh"
 RUN_DIR="$ROOT_DIR/.run"

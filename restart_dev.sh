@@ -138,6 +138,14 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
     mac_enable_tts="$(_read_enable_flag ENABLE_VOICE_TTS false)"
   fi
 
+  echo "Mac service plan:"
+  echo "  Backend:      true"
+  echo "  Frontend:     true"
+  echo "  LLM server:   $mac_enable_llm"
+  echo "  Voice STT:    $mac_enable_stt"
+  echo "  Voice TTS:    $mac_enable_tts"
+  echo ""
+
   # Run backend/frontend via nvidia script, explicitly suppressing all model servers.
   "$ROOT_DIR/nvidia/scripts/restart_dev.sh" \
     --without-local-llm-server \
