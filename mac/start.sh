@@ -7,9 +7,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${SCRIPT_DIR}/../runtime/mac"
 mkdir -p "${LOG_DIR}"
 
-# Activate venv if present
+# Activate venv if present (check mac/ dir then parent)
 if [[ -f "${SCRIPT_DIR}/.venv/bin/activate" ]]; then
   source "${SCRIPT_DIR}/.venv/bin/activate"
+elif [[ -f "${SCRIPT_DIR}/../.venv/bin/activate" ]]; then
+  source "${SCRIPT_DIR}/../.venv/bin/activate"
+fi
+
+# Use python3 if python is not available (common on macOS)
+if ! command -v python &>/dev/null && command -v python3 &>/dev/null; then
+  PYTHON=python3
+else
+  PYTHON=python
 fi
 
 LLM_PORT="${LLM_PORT:-12434}"
@@ -54,7 +63,7 @@ start_server() {
   fi
 
   echo "Starting ${name} on port ${port}..."
-  LISTEN_PORT="${port}" python "${SCRIPT_DIR}/${script}" >"${log}" 2>&1 &
+  LISTEN_PORT="${port}" "${PYTHON}" "${SCRIPT_DIR}/${script}" >"${log}" 2>&1 &
   echo $! >"${pid_file}"
   echo "${name}: started (pid $!, log: ${log})"
 }
