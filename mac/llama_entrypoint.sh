@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODEL_PATH="${MODEL_PATH:-}"
 LLAMA_PORT="${LLAMA_PORT:-12436}"
 LLAMA_HOST="${LLAMA_HOST:-127.0.0.1}"
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-llama-server}"
 N_GPU_LAYERS="${N_GPU_LAYERS:-99}"
 CONTEXT_SIZE="${CONTEXT_SIZE:-16384}"
 TEMPERATURE="${TEMPERATURE:-0.6}"
@@ -18,6 +19,8 @@ LLAMA_DISABLE_NHFR="${LLAMA_DISABLE_NHFR:-false}"
 LLAMA_NO_WARMUP="${LLAMA_NO_WARMUP:-true}"
 N_PARALLEL="${N_PARALLEL:-1}"
 SLOT_SAVE_PATH="${SLOT_SAVE_PATH:-}"
+CACHE_TYPE_K="${CACHE_TYPE_K:-}"
+CACHE_TYPE_V="${CACHE_TYPE_V:-}"
 LLAMA_EXTRA_FLAGS="${LLAMA_EXTRA_FLAGS:-}"
 
 if [ -z "${MODEL_PATH}" ]; then
@@ -31,7 +34,7 @@ if [ ! -f "${MODEL_PATH}" ]; then
   exit 1
 fi
 
-HELP_TEXT="$(llama-server --help 2>&1 || true)"
+HELP_TEXT="$("${LLAMA_SERVER_BIN}" --help 2>&1 || true)"
 
 has_flag() {
   echo "${HELP_TEXT}" | grep -Eq -- "(^|[[:space:]])$1([[:space:],]|$)"
@@ -57,7 +60,7 @@ normalize_reasoning_budget() {
 }
 
 set -- \
-  llama-server \
+  "${LLAMA_SERVER_BIN}" \
   -m "${MODEL_PATH}" \
   -ngl "${N_GPU_LAYERS}" \
   -np "${N_PARALLEL}" \
@@ -121,6 +124,14 @@ fi
 if [ -n "${SLOT_SAVE_PATH}" ] && has_flag "--slot-save-path"; then
   mkdir -p "${SLOT_SAVE_PATH}"
   set -- "$@" --slot-save-path "${SLOT_SAVE_PATH}"
+fi
+
+if [ -n "${CACHE_TYPE_K}" ] && has_flag "--cache-type-k"; then
+  set -- "$@" --cache-type-k "${CACHE_TYPE_K}"
+fi
+
+if [ -n "${CACHE_TYPE_V}" ] && has_flag "--cache-type-v"; then
+  set -- "$@" --cache-type-v "${CACHE_TYPE_V}"
 fi
 
 if [ -n "${LLAMA_EXTRA_FLAGS}" ]; then

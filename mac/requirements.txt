@@ -4,7 +4,8 @@
 
 # Core MLX
 mlx>=0.22.0
-mlx-lm>=0.21.0
+mlx-lm>=0.31.2  # 0.31.2+ required for gemma4 support
+mlx-vlm>=0.4.4  # 0.4.4+ required for gemma4 support
 
 # LLM server proxy
 fastapi>=0.110.0

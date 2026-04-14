@@ -92,7 +92,7 @@ Platform:
 
 Model server flags:
   --with-local-llm-server / --without-local-llm-server
-  --local-llm-server-mode mlx|llama.cpp   Mac local LLM backend to launch
+  --local-llm-server-mode mlx|llama.cpp|gemma|gemma-gguf   Mac local LLM backend to launch
   --with-voice-server / --without-voice-server   (STT + TTS together)
   --with-voice-stt / --without-voice-stt
   --with-voice-tts / --without-voice-tts
@@ -110,6 +110,8 @@ Examples:
   ./restart_dev.sh --platform mac --with-voice-server
   ./restart_dev.sh --platform mac --with-local-llm-server --without-voice-server
   ./restart_dev.sh --platform mac --with-local-llm-server --local-llm-server-mode llama.cpp
+  ./restart_dev.sh --platform mac --with-local-llm-server --local-llm-server-mode gemma
+  ./restart_dev.sh --platform mac --db-mode local --local-llm-server-mode gemma-gguf
   ./restart_dev.sh --platform mac --db-mode local --without-voice-server
   MUSE_PLATFORM=mac ./restart_dev.sh --without-backend --without-frontend --with-voice-stt
 EOF
@@ -210,8 +212,9 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
     case "$mac_llm_mode" in
       mlx) ;;
       llama|llama.cpp) mac_llm_mode="llama.cpp" ;;
+      gemma|gemma-gguf) ;;
       *)
-        echo "Unknown LOCAL_LLM_SERVER_MODE: $mac_llm_mode (use mlx or llama.cpp)"
+        echo "Unknown LOCAL_LLM_SERVER_MODE: $mac_llm_mode (use mlx, llama.cpp, or gemma)"
         exit 1
         ;;
     esac
@@ -246,8 +249,36 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
   MAC_INFRA_ARGS+=("${INFRA_ARGS[@]+"${INFRA_ARGS[@]}"}")
 
   # Run backend/frontend via nvidia script, explicitly suppressing all model servers.
+  _GEMMA_MLX_MODEL="${MLX_GEMMA_MODEL:-majentik/gemma-4-26B-A4B-it-RotorQuant-MLX-4bit}"
   if [[ "$mac_llm_mode" == "llama.cpp" ]]; then
     LOCAL_LLM_API_BASE_URL="${LOCAL_LLM_API_BASE_URL:-http://127.0.0.1:12436/v1}" \
+    MUSE_BACKEND_RELOAD="${MUSE_BACKEND_RELOAD:-false}" \
+    "$ROOT_DIR/nvidia/scripts/restart_dev.sh" \
+      --without-local-llm-server \
+      --without-local-image-server \
+      --without-voice-stt \
+      --without-voice-tts \
+      --without-tool-server \
+      "${MAC_INFRA_ARGS[@]+"${MAC_INFRA_ARGS[@]}"}"
+  elif [[ "$mac_llm_mode" == "gemma" ]]; then
+    LOCAL_LLM_API_BASE_URL="${LOCAL_LLM_API_BASE_URL:-http://127.0.0.1:12437/v1}" \
+    LOCAL_CHAT_MODEL="${LOCAL_CHAT_MODEL:-${_GEMMA_MLX_MODEL}}" \
+    LOCAL_SUMMARIZATION_MODEL="${LOCAL_SUMMARIZATION_MODEL:-${_GEMMA_MLX_MODEL}}" \
+    LOCAL_LLM_PROFILE="${LOCAL_LLM_PROFILE:-${_GEMMA_MLX_MODEL}}" \
+    MUSE_BACKEND_RELOAD="${MUSE_BACKEND_RELOAD:-false}" \
+    "$ROOT_DIR/nvidia/scripts/restart_dev.sh" \
+      --without-local-llm-server \
+      --without-local-image-server \
+      --without-voice-stt \
+      --without-voice-tts \
+      --without-tool-server \
+      "${MAC_INFRA_ARGS[@]+"${MAC_INFRA_ARGS[@]}"}"
+  elif [[ "$mac_llm_mode" == "gemma-gguf" ]]; then
+    _GEMMA_GGUF_MODEL="gemma-4-26B-A4B-it-RotorQuant-Q4_K_M.gguf"
+    LOCAL_LLM_API_BASE_URL="${LOCAL_LLM_API_BASE_URL:-http://127.0.0.1:12439/v1}" \
+    LOCAL_CHAT_MODEL="${LOCAL_CHAT_MODEL:-${_GEMMA_GGUF_MODEL}}" \
+    LOCAL_SUMMARIZATION_MODEL="${LOCAL_SUMMARIZATION_MODEL:-${_GEMMA_GGUF_MODEL}}" \
+    LOCAL_LLM_PROFILE="${LOCAL_LLM_PROFILE:-${_GEMMA_GGUF_MODEL}}" \
     MUSE_BACKEND_RELOAD="${MUSE_BACKEND_RELOAD:-false}" \
     "$ROOT_DIR/nvidia/scripts/restart_dev.sh" \
       --without-local-llm-server \
@@ -281,11 +312,33 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
         echo "Set it to a GGUF file path before using LOCAL_LLM_SERVER_MODE=llama.cpp."
         exit 1
       fi
-      "$ROOT_DIR/mac/start.sh" stop llm >/dev/null 2>&1 || true
+      "$ROOT_DIR/mac/start.sh" stop llm gemma >/dev/null 2>&1 || true
       export MODEL_PATH="$mac_llama_model_path"
       MAC_SERVERS+=(llama)
+    elif [[ "$mac_llm_mode" == "gemma" ]]; then
+      "$ROOT_DIR/mac/start.sh" stop llama llm llama-gemma >/dev/null 2>&1 || true
+      export MLX_GEMMA_MODEL="${_GEMMA_MLX_MODEL}"
+      MAC_SERVERS+=(gemma)
+    elif [[ "$mac_llm_mode" == "gemma-gguf" ]]; then
+      "$ROOT_DIR/mac/start.sh" stop llama llm gemma >/dev/null 2>&1 || true
+      gemma_gguf_path="$(_read_config_value GEMMA_GGUF_MODEL_PATH "")"
+      if [[ -z "${GEMMA_GGUF_MODEL_PATH:-}" && -z "${gemma_gguf_path:-}" ]]; then
+        _GEMMA_GGUF_FILENAME="gemma-4-26B-A4B-it-RotorQuant-Q4_K_M.gguf"
+        _hf_hub="${HF_HOME:-${HOME}/.cache/huggingface}/hub"
+        _discovered="$(find "${_hf_hub}" -name "${_GEMMA_GGUF_FILENAME}" 2>/dev/null | head -1)"
+        if [[ -n "${_discovered:-}" ]]; then
+          echo "Auto-discovered GEMMA_GGUF_MODEL_PATH: ${_discovered}"
+          gemma_gguf_path="${_discovered}"
+        else
+          echo "GEMMA_GGUF_MODEL_PATH is not set and ${_GEMMA_GGUF_FILENAME} was not found in ${_hf_hub}."
+          echo "Set it in muse_local_model_serving/.env or export it before running."
+          exit 1
+        fi
+      fi
+      export GEMMA_GGUF_MODEL_PATH="${GEMMA_GGUF_MODEL_PATH:-${gemma_gguf_path}}"
+      MAC_SERVERS+=(llama-gemma)
     else
-      "$ROOT_DIR/mac/start.sh" stop llama >/dev/null 2>&1 || true
+      "$ROOT_DIR/mac/start.sh" stop llama gemma >/dev/null 2>&1 || true
       MAC_SERVERS+=(llm)
     fi
   fi
@@ -301,6 +354,10 @@ if [[ "$PLATFORM" == "mac" || "$PLATFORM" == "apple" ]]; then
       echo "Waiting for Mac LLM server..."
       if [[ "$mac_llm_mode" == "llama.cpp" ]]; then
         wait_for_http "http://127.0.0.1:12436/v1/models" "Mac llama.cpp server" 240 || exit 1
+      elif [[ "$mac_llm_mode" == "gemma" ]]; then
+        wait_for_http "http://127.0.0.1:12437/v1/models" "Mac Gemma MLX server" 240 || exit 1
+      elif [[ "$mac_llm_mode" == "gemma-gguf" ]]; then
+        wait_for_http "http://127.0.0.1:12439/v1/models" "Mac Gemma GGUF server" 240 || exit 1
       else
         wait_for_http "http://127.0.0.1:12434/v1/models" "Mac MLX server" 240 || exit 1
       fi

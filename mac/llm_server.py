@@ -29,6 +29,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 MODEL_ID = os.getenv("MLX_LLM_MODEL", "mlx-community/Qwen3.5-4B-MLX-4bit")
 UPSTREAM_PORT = int(os.getenv("MLX_LLM_UPSTREAM_PORT", "12435"))
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "12434"))
+PROMPT_CACHE_SIZE = int(os.getenv("MLX_PROMPT_CACHE_SIZE", "3"))
+CHAT_TEMPLATE_FILE = os.getenv("MLX_CHAT_TEMPLATE_FILE", "")
+MAX_TOKENS = int(os.getenv("MLX_LLM_MAX_TOKENS", "512"))
+
+# Qwen3 hybrid-attention models need thinking mode explicitly disabled.
+_IS_QWEN3 = "Qwen3" in MODEL_ID or "qwen3" in MODEL_ID.lower()
 
 app = FastAPI(title="MLX LLM Server (Qwen3.5-4B)")
 _upstream_proc: subprocess.Popen | None = None
@@ -42,8 +48,11 @@ def _start_upstream():
         "--model", MODEL_ID,
         "--port", str(UPSTREAM_PORT),
         "--host", "127.0.0.1",
-        "--prompt-cache-size", "3",
+        "--prompt-cache-size", str(PROMPT_CACHE_SIZE),
     ]
+    if CHAT_TEMPLATE_FILE:
+        cmd += ["--chat-template", CHAT_TEMPLATE_FILE]
+    cmd += ["--max-tokens", str(MAX_TOKENS)]
     print(f"Starting mlx_lm.server: {' '.join(cmd)}", flush=True)
     _upstream_proc = subprocess.Popen(cmd)
 
@@ -100,8 +109,9 @@ async def _proxy(request: Request, path: str):
             if msgs and not any(m.get("role") == "user" for m in msgs):
                 msgs.append({"role": "user", "content": "go"})
                 payload["messages"] = msgs
-            # Disable thinking mode for Qwen3.5 — produces content immediately.
-            payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+            # Disable thinking mode for Qwen3 — produces content immediately.
+            if _IS_QWEN3:
+                payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
             # Ensure streaming responses include usage stats.
             if payload.get("stream"):
                 payload.setdefault("stream_options", {})["include_usage"] = True

@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLUIDAUDIO_INSTALL_DIR="${HOME}/.local/bin"
 FLUIDAUDIO_CLI="${FLUIDAUDIO_INSTALL_DIR}/fluidaudiocli"
 FLUIDAUDIO_BUILD_DIR="${SCRIPT_DIR}/../.build/FluidAudio"
+ROTORQUANT_BUILD_DIR="${SCRIPT_DIR}/../.build/llama-cpp-turboquant"
+ROTORQUANT_BIN="${ROTORQUANT_BUILD_DIR}/build/bin/llama-server"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -129,6 +131,60 @@ else
   fi
 fi
 
+# ── RotorQuant llama.cpp fork (Gemma-4 GGUF KV cache) ─────────────
+
+step "Building RotorQuant llama.cpp fork (planar3/iso3 KV cache)"
+
+if [[ -f "${ROTORQUANT_BIN}" ]]; then
+  info "RotorQuant llama-server already built at ${ROTORQUANT_BIN}"
+  echo "  To rebuild: rm -rf ${ROTORQUANT_BUILD_DIR}/build && re-run ./setup.sh"
+else
+  echo "  This builds johndpope/llama-cpp-turboquant (feature/planarquant-kv-cache)"
+  echo "  with Metal support for Apple Silicon. May take 5-10 minutes."
+  echo ""
+
+  if ! command -v cmake &>/dev/null; then
+    fail "cmake not found. Install it: brew install cmake"
+  fi
+
+  if [[ -d "${ROTORQUANT_BUILD_DIR}/.git" ]]; then
+    info "RotorQuant source already cloned"
+    echo "  Fetching latest changes..."
+    git -C "${ROTORQUANT_BUILD_DIR}" fetch --quiet origin feature/planarquant-kv-cache 2>/dev/null || true
+    git -C "${ROTORQUANT_BUILD_DIR}" checkout --quiet feature/planarquant-kv-cache 2>/dev/null || true
+    git -C "${ROTORQUANT_BUILD_DIR}" pull --quiet 2>/dev/null || true
+  else
+    echo "  Cloning johndpope/llama-cpp-turboquant..."
+    mkdir -p "$(dirname "${ROTORQUANT_BUILD_DIR}")"
+    git clone --quiet --branch feature/planarquant-kv-cache \
+      https://github.com/johndpope/llama-cpp-turboquant.git "${ROTORQUANT_BUILD_DIR}"
+    info "RotorQuant source cloned"
+  fi
+
+  echo "  Configuring CMake (Metal + embedded library)..."
+  cmake -B "${ROTORQUANT_BUILD_DIR}/build" \
+    -S "${ROTORQUANT_BUILD_DIR}" \
+    -DGGML_METAL=ON \
+    -DGGML_METAL_EMBED_LIBRARY=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_BUILD_EXAMPLES=OFF \
+    -DLLAMA_BUILD_SERVER=ON \
+    2>&1 | tail -5
+
+  echo "  Building llama-server (this will take a few minutes)..."
+  cmake --build "${ROTORQUANT_BUILD_DIR}/build" \
+    --target llama-server \
+    -j "$(sysctl -n hw.logicalcpu)" \
+    2>&1 | tail -10
+
+  if [[ -f "${ROTORQUANT_BIN}" ]]; then
+    info "RotorQuant llama-server built: ${ROTORQUANT_BIN}"
+  else
+    fail "Build completed but binary not found at ${ROTORQUANT_BIN}. Check build output above."
+  fi
+fi
+
 # ── Verify ─────────────────────────────────────────────────────────
 
 step "Verifying setup"
@@ -152,5 +208,7 @@ echo ""
 echo -e "${GREEN}${BOLD}Setup complete!${NC}"
 echo ""
 echo "  Start servers:  ./start.sh"
+echo "  Download model: hf download majentik/gemma-4-26B-A4B-it-RotorQuant-GGUF-Q4_K_M --include '*.gguf' --local-dir ~/.cache/huggingface/hub/models--majentik--gemma-4-26B-A4B-it-RotorQuant-GGUF-Q4_K_M"
+echo "  Gemma GGUF:     GEMMA_GGUF_MODEL_PATH=/path/to/gemma-4-26B-A4B-it-RotorQuant-GGUF-Q4_K_M.gguf ./start.sh start llama-gemma"
 echo "  Or from repo root:  ./restart_dev.sh --platform mac --with-voice-server"
 echo ""
